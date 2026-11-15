@@ -1,0 +1,154 @@
+{
+  "config": {
+    "tau_score": 0.85,
+    "tau_mask": 0.55,
+    "min_area": 10,
+    "area_retention": 0.5,
+    "min_cluster_score_for_candidates": 0.3,
+    "families": [
+      "clahe",
+      "a5",
+      "dice",
+      "a5dice",
+      "2048"
+    ]
+  },
+  "totals": {
+    "tp": 5246,
+    "fp": 2320,
+    "fn": 2953,
+    "pq": 0.449673012152807,
+    "sq": 0.6756667019242282,
+    "rq": 0.6655248969235649
+  },
+  "fn_categories": {
+    "no_candidate": 535,
+    "seg_near_miss": 1028,
+    "below_tau": 1058,
+    "partial": 291,
+    "lost_in_canvas": 41
+  },
+  "fp_categories": {
+    "other_annotator": 863,
+    "background": 665,
+    "near_miss": 536,
+    "partial": 256
+  },
+  "fn_categories_by_fold": {
+    "0": {
+      "no_candidate": 117,
+      "seg_near_miss": 243,
+      "below_tau": 252,
+      "partial": 62,
+      "lost_in_canvas": 4
+    },
+    "1": {
+      "seg_near_miss": 181,
+      "below_tau": 196,
+      "no_candidate": 92,
+      "lost_in_canvas": 6,
+      "partial": 55
+    },
+    "2": {
+      "below_tau": 202,
+      "seg_near_miss": 223,
+      "partial": 63,
+      "no_candidate": 94,
+      "lost_in_canvas": 7
+    },
+    "3": {
+      "seg_near_miss": 204,
+      "no_candidate": 119,
+      "below_tau": 212,
+      "partial": 50,
+      "lost_in_canvas": 16
+    },
+    "4": {
+      "seg_near_miss": 177,
+      "partial": 61,
+      "below_tau": 196,
+      "no_candidate": 113,
+      "lost_in_canvas": 8
+    }
+  },
+  "fp_categories_by_fold": {
+    "0": {
+      "other_annotator": 220,
+      "background": 124,
+      "near_miss": 105,
+      "partial": 46
+    },
+    "1": {
+      "partial": 59,
+      "near_miss": 94,
+      "background": 192,
+      "other_annotator": 177
+    },
+    "2": {
+      "background": 130,
+      "other_annotator": 150,
+      "near_miss": 124,
+      "partial": 45
+    },
+    "3": {
+      "other_annotator": 188,
+      "background": 120,
+      "partial": 57,
+      "near_miss": 123
+    },
+    "4": {
+      "other_annotator": 128,
+      "background": 99,
+      "near_miss": 90,
+      "partial": 49
+    }
+  },
+  "fn_support": {
+    "only_this_annotator": 1199,
+    "single_record_image": 1228,
+    "supported_by_other_annotator": 526
+  },
+  "fn_below_tau_best_score_quantiles": [
+    0.3790263369679451,
+    0.4760110192000866,
+    0.6300596550107003,
+    0.7610555797815323,
+    0.8202754460275172
+  ],
+  "gt_area_bins": {
+    "1000-3000": 3232,
+    "300-1000": 3053,
+    "3000-inf": 1579,
+    "0-300": 335
+  },
+  "fn_area_bins": {
+    "1000-3000": 988,
+    "300-1000": 1237,
+    "0-300": 235,
+    "3000-inf": 493
+  },
+  "tp_iou_quantiles": [
+    0.5567104865007673,
+    0.6127843169440721,
+    0.6788496011368106,
+    0.7399565089193573,
+    0.7830134605886716
+  ],
+  "tp_iou_frac_in_0.5_0.6": 0.21330537552420892,
+  "tp_pred_over_gt_area_quantiles": [
+    0.7403544655845713,
+    0.8640368930720463,
+    1.0266141990490243,
+    1.2134336454328907,
+    1.4068441064638784
+  ],
+  "pq_sensitivities": {
+    "dPQ_per_FP_removed": 2.8523502198084805e-05,
+    "dPQ_per_FN_converted_to_TP_at_mean_SQ": 5.719380854396761e-05,
+    "dPQ_per_+0.01_mean_TP_IoU": 0.006655248969235649,
+    "FP_removed_for_+0.001": 35.0588084540034,
+    "FN_converted_for_+0.001": 17.484410034195438,
+    "mean_TP_IoU_gain_for_+0.001": 0.0015025733892489515
+  },
+  "elapsed_sec": 137.50075459480286
+}

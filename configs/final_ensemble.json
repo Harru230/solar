@@ -1,0 +1,461 @@
+{
+  "name": "multifam_30model",
+  "description": "Authoritative 30-Model Multi-Family Ensemble for Solar Filament Segmentation Challenge 2026",
+  "total_models": 30,
+  "total_views": 120,
+  "families": {
+    "clahe": {
+      "count": 5,
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "desc": "Multi-Scale CLAHE 1536px (Folds 0-4)"
+    },
+    "anchors5": {
+      "count": 5,
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce",
+      "desc": "5-Aspect-Ratio Anchors 1536px (Folds 0-4)"
+    },
+    "dice": {
+      "count": 5,
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce_dice",
+      "desc": "BCE + Soft Dice Loss 1536px (Folds 0-4)"
+    },
+    "2048": {
+      "count": 5,
+      "img_size": 2048,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "desc": "Native 2048px Resolution (Folds 0-4)"
+    },
+    "a5dice": {
+      "count": 5,
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce_dice",
+      "desc": "5 Anchors + Soft Dice 1536px (Folds 0-4)"
+    },
+    "1792_clahe": {
+      "count": 5,
+      "img_size": 1792,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "desc": "Multi-Scale CLAHE 1792px (Folds 0-4)"
+    }
+  },
+  "family_views": {
+    "clahe": 20,
+    "anchors5": 20,
+    "dice": 20,
+    "2048": 20,
+    "a5dice": 20,
+    "1792_clahe": 20
+  },
+  "models": [
+    {
+      "id": "f0_1536",
+      "family": "clahe",
+      "fold": 0,
+      "pruned_name": "r50_1536_clahe_f0.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_clahe_e30/checkpoints/checkpoint_fold0_last.pt",
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f1_1536",
+      "family": "clahe",
+      "fold": 1,
+      "pruned_name": "r50_1536_clahe_f1.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_all_f1/checkpoints/checkpoint_fold1_last.pt",
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f2_1536",
+      "family": "clahe",
+      "fold": 2,
+      "pruned_name": "r50_1536_clahe_f2.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_all_f2/checkpoints/checkpoint_fold2_last.pt",
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f3_1536",
+      "family": "clahe",
+      "fold": 3,
+      "pruned_name": "r50_1536_clahe_f3.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_all_f3/checkpoints/checkpoint_fold3_last.pt",
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f4_1536",
+      "family": "clahe",
+      "fold": 4,
+      "pruned_name": "r50_1536_clahe_f4.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_all_f4/checkpoints/checkpoint_fold4_last.pt",
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f0_anchors5",
+      "family": "anchors5",
+      "fold": 0,
+      "pruned_name": "r50_1536_anchors5_f0.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_anchors5_e30/checkpoints/maskrcnn_fold0_best.pt",
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f1_anchors5",
+      "family": "anchors5",
+      "fold": 1,
+      "pruned_name": "r50_1536_anchors5_f1.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_a5_f1/checkpoints/checkpoint_fold1_last.pt",
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f2_anchors5",
+      "family": "anchors5",
+      "fold": 2,
+      "pruned_name": "r50_1536_anchors5_f2.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_a5_f2/checkpoints/checkpoint_fold2_last.pt",
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f3_anchors5",
+      "family": "anchors5",
+      "fold": 3,
+      "pruned_name": "r50_1536_anchors5_f3.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_a5_f3/checkpoints/checkpoint_fold3_last.pt",
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f4_anchors5",
+      "family": "anchors5",
+      "fold": 4,
+      "pruned_name": "r50_1536_anchors5_f4.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_a5_f4/checkpoints/checkpoint_fold4_last.pt",
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f0_dice",
+      "family": "dice",
+      "fold": 0,
+      "pruned_name": "r50_1536_dice_f0.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_dice_e30/checkpoints/maskrcnn_fold0_best.pt",
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce_dice",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f1_dice",
+      "family": "dice",
+      "fold": 1,
+      "pruned_name": "r50_1536_dice_f1.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_dice_f1/checkpoints/checkpoint_fold1_last.pt",
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce_dice",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f2_dice",
+      "family": "dice",
+      "fold": 2,
+      "pruned_name": "r50_1536_dice_f2.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_dice_f2/checkpoints/checkpoint_fold2_last.pt",
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce_dice",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f3_dice",
+      "family": "dice",
+      "fold": 3,
+      "pruned_name": "r50_1536_dice_f3.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_dice_f3/checkpoints/checkpoint_fold3_last.pt",
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce_dice",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f4_dice",
+      "family": "dice",
+      "fold": 4,
+      "pruned_name": "r50_1536_dice_f4.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_dice_f4/checkpoints/checkpoint_fold4_last.pt",
+      "img_size": 1536,
+      "anchors5": false,
+      "mask_loss": "bce_dice",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f0_2048",
+      "family": "2048",
+      "fold": 0,
+      "pruned_name": "r50_2048_f0.pt",
+      "checkpoint_relpath": "work/runs/r50_2048_all_e30/checkpoints/maskrcnn_fold0_best.pt",
+      "img_size": 2048,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f1_2048",
+      "family": "2048",
+      "fold": 1,
+      "pruned_name": "r50_2048_f1.pt",
+      "checkpoint_relpath": "work/runs/r50_2048_all_f1/checkpoints/checkpoint_fold1_last.pt",
+      "img_size": 2048,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f2_2048",
+      "family": "2048",
+      "fold": 2,
+      "pruned_name": "r50_2048_f2.pt",
+      "checkpoint_relpath": "work/runs/r50_2048_all_f2/checkpoints/checkpoint_fold2_last.pt",
+      "img_size": 2048,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f3_2048",
+      "family": "2048",
+      "fold": 3,
+      "pruned_name": "r50_2048_f3.pt",
+      "checkpoint_relpath": "work/runs/r50_2048_all_f3/checkpoints/checkpoint_fold3_last.pt",
+      "img_size": 2048,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f4_2048",
+      "family": "2048",
+      "fold": 4,
+      "pruned_name": "r50_2048_f4.pt",
+      "checkpoint_relpath": "work/runs/r50_2048_all_f4/checkpoints/checkpoint_fold4_last.pt",
+      "img_size": 2048,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f0_a5dice",
+      "family": "a5dice",
+      "fold": 0,
+      "pruned_name": "r50_1536_a5dice_f0.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_a5dice_f0/checkpoints/checkpoint_fold0_last.pt",
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce_dice",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f1_a5dice",
+      "family": "a5dice",
+      "fold": 1,
+      "pruned_name": "r50_1536_a5dice_f1.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_a5dice_f1/checkpoints/checkpoint_fold1_last.pt",
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce_dice",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f2_a5dice",
+      "family": "a5dice",
+      "fold": 2,
+      "pruned_name": "r50_1536_a5dice_f2.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_a5dice_f2/checkpoints/checkpoint_fold2_last.pt",
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce_dice",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f3_a5dice",
+      "family": "a5dice",
+      "fold": 3,
+      "pruned_name": "r50_1536_a5dice_f3.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_a5dice_f3/checkpoints/checkpoint_fold3_last.pt",
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce_dice",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f4_a5dice",
+      "family": "a5dice",
+      "fold": 4,
+      "pruned_name": "r50_1536_a5dice_f4.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_a5dice_f4/checkpoints/checkpoint_fold4_last.pt",
+      "img_size": 1536,
+      "anchors5": true,
+      "mask_loss": "bce_dice",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f0_1792",
+      "family": "1792_clahe",
+      "fold": 0,
+      "pruned_name": "r50_1792_clahe_f0.pt",
+      "checkpoint_relpath": "work/runs/r50_1792_clahe_f0/checkpoints/checkpoint_fold0_last.pt",
+      "img_size": 1792,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f1_1792",
+      "family": "1792_clahe",
+      "fold": 1,
+      "pruned_name": "r50_1792_clahe_f1.pt",
+      "checkpoint_relpath": "work/runs/r50_1792_clahe_f1/checkpoints/checkpoint_fold1_last.pt",
+      "img_size": 1792,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f2_1792",
+      "family": "1792_clahe",
+      "fold": 2,
+      "pruned_name": "r50_1792_clahe_f2.pt",
+      "checkpoint_relpath": "work/runs/r50_1792_clahe_f2/checkpoints/checkpoint_fold2_last.pt",
+      "img_size": 1792,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f3_1792",
+      "family": "1792_clahe",
+      "fold": 3,
+      "pruned_name": "r50_1792_clahe_f3.pt",
+      "checkpoint_relpath": "work/runs/r50_1792_clahe_f3/checkpoints/checkpoint_fold3_last.pt",
+      "img_size": 1792,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    },
+    {
+      "id": "f4_1792",
+      "family": "1792_clahe",
+      "fold": 4,
+      "pruned_name": "r50_1792_clahe_f4.pt",
+      "checkpoint_relpath": "work/runs/r50_1792_clahe_f4/checkpoints/checkpoint_fold4_last.pt",
+      "img_size": 1792,
+      "anchors5": false,
+      "mask_loss": "bce",
+      "views": 4,
+      "prob_shift": 0.0
+    }
+  ],
+  "decision_rules": {
+    "rule_A": {
+      "name": "Rule A: Uniform WMF (30 models, 120 views)",
+      "description": "Unweighted multi-family fusion, equal weights across all 6 families",
+      "tau_score": 0.85,
+      "tau_mask": 0.55,
+      "gamma": 1.0,
+      "family_weights": {
+        "clahe": 1.0,
+        "anchors5": 1.0,
+        "dice": 1.0,
+        "2048": 1.0,
+        "a5dice": 1.0,
+        "1792_clahe": 1.0
+      },
+      "public_lb_score": 0.39,
+      "nested_oof_pq": 0.4508
+    },
+    "rule_B": {
+      "name": "Rule B: Weighted WMF (30 models, 120 views)",
+      "description": "High-resolution weighted multi-family fusion (w=2.0 for 2048 and 1792_clahe, gamma=1.5)",
+      "tau_score": 0.75,
+      "tau_mask": 0.55,
+      "gamma": 1.5,
+      "family_weights": {
+        "clahe": 1.0,
+        "anchors5": 1.0,
+        "dice": 1.0,
+        "a5dice": 1.0,
+        "2048": 2.0,
+        "1792_clahe": 2.0
+      },
+      "public_lb_score": 0.4,
+      "nested_oof_pq": 0.4521
+    }
+  },
+  "postprocessing": {
+    "disjoint_canvas": true,
+    "min_area_px": 10,
+    "min_retained_ratio": 0.5
+  }
+}

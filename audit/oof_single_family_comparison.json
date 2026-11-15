@@ -1,0 +1,50 @@
+{
+  "1536_clahe": {
+    "pq": 0.43376344136473155,
+    "sq": 0.6686769948150436,
+    "rq": 0.6486890452762035,
+    "tp": 5208,
+    "fp": 2650,
+    "fn": 2991,
+    "gt_multi_hit": 0,
+    "pred_multi_hit": 1,
+    "annotator_images": 1154,
+    "images_without_prediction": 13
+  },
+  "1536_anchors5": {
+    "pq": 0.4330494423439384,
+    "sq": 0.6683138774381026,
+    "rq": 0.647973141009699,
+    "tp": 5211,
+    "fp": 2674,
+    "fn": 2988,
+    "gt_multi_hit": 0,
+    "pred_multi_hit": 1,
+    "annotator_images": 1154,
+    "images_without_prediction": 12
+  },
+  "1536_dice": {
+    "pq": 0.4323294465632728,
+    "sq": 0.667063019340982,
+    "rq": 0.6481088503307951,
+    "tp": 5192,
+    "fp": 2631,
+    "fn": 3007,
+    "gt_multi_hit": 0,
+    "pred_multi_hit": 1,
+    "annotator_images": 1154,
+    "images_without_prediction": 15
+  },
+  "2048_all": {
+    "pq": 0.44167629645805234,
+    "sq": 0.6740320805357579,
+    "rq": 0.6552748885586924,
+    "tp": 5292,
+    "fp": 2661,
+    "fn": 2907,
+    "gt_multi_hit": 0,
+    "pred_multi_hit": 1,
+    "annotator_images": 1154,
+    "images_without_prediction": 15
+  }
+}

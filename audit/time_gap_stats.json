@@ -1,0 +1,33 @@
+{
+  "validation_gaps_to_nearest_train_in_fold_split_hours": {
+    "count": 707,
+    "median_hours": 46.40694444444444,
+    "median_days": 1.933622685185185,
+    "mean_hours": 76.36382052490963,
+    "mean_days": 3.181825855204568,
+    "min_hours": 0.013888888888888888,
+    "max_hours": 1581.8944444444444,
+    "max_days": 65.91226851851852
+  },
+  "test_gaps_to_nearest_train_in_all_707_hours": {
+    "count": 180,
+    "median_hours": 36.68055555555556,
+    "median_days": 1.5283564814814816,
+    "mean_hours": 63.43121913580247,
+    "mean_days": 2.6429674639917696,
+    "min_hours": 0.013888888888888888,
+    "max_hours": 1299.9888888888888,
+    "max_days": 54.1662037037037
+  },
+  "validation_gaps_against_other_train_in_all_707_hours": {
+    "count": 707,
+    "median_hours": 36.36944444444444,
+    "median_days": 1.5153935185185184,
+    "mean_hours": 65.65525545339665,
+    "mean_days": 2.735635643891527,
+    "min_hours": 0.013888888888888888,
+    "max_hours": 1581.8944444444444,
+    "max_days": 65.91226851851852
+  },
+  "plot_file": "audit/time_gap_distribution.png"
+}

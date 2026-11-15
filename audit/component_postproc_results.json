@@ -1,0 +1,412 @@
+{
+  "elapsed_sec": 499.06181383132935,
+  "acceptance_rule": {
+    "min_delta_pq": 0.002,
+    "min_p_value": 0.95,
+    "bootstrap_B": 10000,
+    "seed": 2026
+  },
+  "oof_note": "Evaluated in-sample at fixed global Rule A and Rule B thresholds from configs/final_ensemble.json across all 707 OOF images.",
+  "oof_rule_A": {
+    "baseline": {
+      "pq": 0.45195696159525667,
+      "sq": 0.6760533577525111,
+      "rq": 0.6685226194242329,
+      "tp": 5283,
+      "fp": 2323,
+      "fn": 2916,
+      "pred_count": 4674,
+      "multi_comp_pred_count": 262
+    },
+    "drop_multi": {
+      "pq": 0.44497644264060854,
+      "sq": 0.6790796314176184,
+      "rq": 0.6552640103660512,
+      "tp": 5057,
+      "fp": 2179,
+      "fn": 3142,
+      "pred_count": 4431,
+      "multi_comp_pred_count": 0,
+      "delta_pq": -0.006980518954648407,
+      "boot_mean_delta": -0.006986767662841478,
+      "ci_95": [
+        -0.009078635479746962,
+        -0.004921729784244402
+      ],
+      "p_variant_gt_baseline": 0.0,
+      "accepted": false
+    },
+    "keep_largest": {
+      "pq": 0.4492140804294735,
+      "sq": 0.6773346226086528,
+      "rq": 0.6632085020242915,
+      "tp": 5242,
+      "fp": 2367,
+      "fn": 2957,
+      "pred_count": 4674,
+      "multi_comp_pred_count": 0,
+      "delta_pq": -0.002742881165783473,
+      "boot_mean_delta": -0.0027643441848003206,
+      "ci_95": [
+        -0.00408118614876037,
+        -0.001494322073386373
+      ],
+      "p_variant_gt_baseline": 0.0,
+      "accepted": false
+    },
+    "min_comp_25": {
+      "pq": 0.4520250763995242,
+      "sq": 0.6760696841133524,
+      "rq": 0.6686072264759856,
+      "tp": 5283,
+      "fp": 2321,
+      "fn": 2916,
+      "pred_count": 4672,
+      "multi_comp_pred_count": 231,
+      "delta_pq": 6.81148042672719e-05,
+      "boot_mean_delta": 6.829161653110239e-05,
+      "ci_95": [
+        6.390604310714532e-06,
+        0.00015909316362457818
+      ],
+      "p_variant_gt_baseline": 0.9991,
+      "accepted": false
+    },
+    "min_comp_50": {
+      "pq": 0.45202860442482257,
+      "sq": 0.6760749607917349,
+      "rq": 0.6686072264759856,
+      "tp": 5283,
+      "fp": 2321,
+      "fn": 2916,
+      "pred_count": 4672,
+      "multi_comp_pred_count": 212,
+      "delta_pq": 7.164282956562129e-05,
+      "boot_mean_delta": 7.188460724914144e-05,
+      "ci_95": [
+        6.6342843991346045e-06,
+        0.0001658537996631251
+      ],
+      "p_variant_gt_baseline": 0.9925,
+      "accepted": false
+    },
+    "min_comp_100": {
+      "pq": 0.4519103632482774,
+      "sq": 0.6761540873331308,
+      "rq": 0.6683541099791179,
+      "tp": 5281,
+      "fp": 2323,
+      "fn": 2918,
+      "pred_count": 4672,
+      "multi_comp_pred_count": 182,
+      "delta_pq": -4.6598346979565e-05,
+      "boot_mean_delta": -4.796454075668592e-05,
+      "ci_95": [
+        -0.00033081874386439307,
+        0.00020750173539313952
+      ],
+      "p_variant_gt_baseline": 0.3738,
+      "accepted": false
+    },
+    "min_comp_150": {
+      "pq": 0.4516661798047659,
+      "sq": 0.6762581934124419,
+      "rq": 0.6678901404885458,
+      "tp": 5277,
+      "fp": 2326,
+      "fn": 2922,
+      "pred_count": 4671,
+      "multi_comp_pred_count": 161,
+      "delta_pq": -0.0002907817904910237,
+      "boot_mean_delta": -0.0002894863918550144,
+      "ci_95": [
+        -0.0007473553585019013,
+        9.521220325817416e-05
+      ],
+      "p_variant_gt_baseline": 0.0816,
+      "accepted": false
+    },
+    "min_comp_200": {
+      "pq": 0.4515717063378741,
+      "sq": 0.6763730903839892,
+      "rq": 0.6676370079736742,
+      "tp": 5275,
+      "fp": 2328,
+      "fn": 2924,
+      "pred_count": 4671,
+      "multi_comp_pred_count": 150,
+      "delta_pq": -0.00038525525738286603,
+      "boot_mean_delta": -0.0003828844149089523,
+      "ci_95": [
+        -0.0008725471213909374,
+        4.525089495722993e-05
+      ],
+      "p_variant_gt_baseline": 0.0445,
+      "accepted": false
+    }
+  },
+  "oof_rule_B": {
+    "baseline": {
+      "pq": 0.4543272396727003,
+      "sq": 0.6772625528150404,
+      "rq": 0.6708288207937823,
+      "tp": 5265,
+      "fp": 2233,
+      "fn": 2934,
+      "pred_count": 4602,
+      "multi_comp_pred_count": 263
+    },
+    "drop_multi": {
+      "pq": 0.4469249060690407,
+      "sq": 0.6802479563155792,
+      "rq": 0.6570029382957885,
+      "tp": 5031,
+      "fp": 2085,
+      "fn": 3168,
+      "pred_count": 4362,
+      "multi_comp_pred_count": 0,
+      "delta_pq": -0.007402333603659883,
+      "boot_mean_delta": -0.007411727252196178,
+      "ci_95": [
+        -0.00970239108473332,
+        -0.005155812810899865
+      ],
+      "p_variant_gt_baseline": 0.0,
+      "accepted": false
+    },
+    "keep_largest": {
+      "pq": 0.4510215675301568,
+      "sq": 0.6786500263440065,
+      "rq": 0.664586384767242,
+      "tp": 5218,
+      "fp": 2286,
+      "fn": 2981,
+      "pred_count": 4607,
+      "multi_comp_pred_count": 0,
+      "delta_pq": -0.0033056721425437363,
+      "boot_mean_delta": -0.003330341247577766,
+      "ci_95": [
+        -0.005014486990988626,
+        -0.0017060764203056008
+      ],
+      "p_variant_gt_baseline": 0.0,
+      "accepted": false
+    },
+    "min_comp_25": {
+      "pq": 0.4542914171481455,
+      "sq": 0.6772946507938157,
+      "rq": 0.6707441386340469,
+      "tp": 5264,
+      "fp": 2233,
+      "fn": 2935,
+      "pred_count": 4601,
+      "multi_comp_pred_count": 232,
+      "delta_pq": -3.582252455502921e-05,
+      "boot_mean_delta": -3.4919421540263364e-05,
+      "ci_95": [
+        -0.00019141288542222357,
+        8.182795236810896e-05
+      ],
+      "p_variant_gt_baseline": 0.3181,
+      "accepted": false
+    },
+    "min_comp_50": {
+      "pq": 0.45431667415713156,
+      "sq": 0.677332306000222,
+      "rq": 0.6707441386340469,
+      "tp": 5264,
+      "fp": 2233,
+      "fn": 2935,
+      "pred_count": 4601,
+      "multi_comp_pred_count": 220,
+      "delta_pq": -1.0565515568994321e-05,
+      "boot_mean_delta": -9.757532430948678e-06,
+      "ci_95": [
+        -0.00016989619181555088,
+        0.00010780928060490766
+      ],
+      "p_variant_gt_baseline": 0.4926,
+      "accepted": false
+    },
+    "min_comp_100": {
+      "pq": 0.4541431268294116,
+      "sq": 0.6774596577375447,
+      "rq": 0.670361875637105,
+      "tp": 5261,
+      "fp": 2236,
+      "fn": 2938,
+      "pred_count": 4601,
+      "multi_comp_pred_count": 198,
+      "delta_pq": -0.00018411284328895272,
+      "boot_mean_delta": -0.00018411417006997932,
+      "ci_95": [
+        -0.00047150833462012017,
+        4.954151355670702e-05
+      ],
+      "p_variant_gt_baseline": 0.0746,
+      "accepted": false
+    },
+    "min_comp_150": {
+      "pq": 0.45415228021443743,
+      "sq": 0.6775157686012719,
+      "rq": 0.6703198674652734,
+      "tp": 5260,
+      "fp": 2235,
+      "fn": 2939,
+      "pred_count": 4599,
+      "multi_comp_pred_count": 178,
+      "delta_pq": -0.0001749594582631242,
+      "boot_mean_delta": -0.00017486014523293873,
+      "ci_95": [
+        -0.0004988178114809935,
+        0.00010804398149349544
+      ],
+      "p_variant_gt_baseline": 0.1224,
+      "accepted": false
+    },
+    "min_comp_200": {
+      "pq": 0.45400153369215657,
+      "sq": 0.6775485041617255,
+      "rq": 0.6700649929909519,
+      "tp": 5258,
+      "fp": 2237,
+      "fn": 2941,
+      "pred_count": 4599,
+      "multi_comp_pred_count": 161,
+      "delta_pq": -0.0003257059805439888,
+      "boot_mean_delta": -0.0003266678554108249,
+      "ci_95": [
+        -0.0007627894080516423,
+        6.169559984400547e-05
+      ],
+      "p_variant_gt_baseline": 0.0515,
+      "accepted": false
+    }
+  },
+  "test_candidates": {
+    "rule_A": {
+      "drop_multi": {
+        "ref_csv": "../solar/work/oof/submission_A_uniform_30models.csv",
+        "cand_csv": "../solar/work/oof/submission_A2_drop_multi.csv",
+        "ref_filaments": 1165,
+        "cand_filaments": 1129,
+        "delta_filaments": -36,
+        "images_changed": 34,
+        "unchanged_exact_rles": 1123,
+        "ref_rles_removed_or_changed": 42,
+        "cand_rles_added_or_changed": 6,
+        "pct_ref_instances_changed": 3.6051502145922747,
+        "total_rows": 1132,
+        "multi_comp_pred_count": 0,
+        "validator_passed": true
+      },
+      "keep_largest": {
+        "ref_csv": "../solar/work/oof/submission_A_uniform_30models.csv",
+        "cand_csv": "../solar/work/oof/submission_A2_keep_largest.csv",
+        "ref_filaments": 1165,
+        "cand_filaments": 1165,
+        "delta_filaments": 0,
+        "images_changed": 34,
+        "unchanged_exact_rles": 1123,
+        "ref_rles_removed_or_changed": 42,
+        "cand_rles_added_or_changed": 42,
+        "pct_ref_instances_changed": 3.6051502145922747,
+        "total_rows": 1168,
+        "multi_comp_pred_count": 0,
+        "validator_passed": true
+      },
+      "min_comp_50": {
+        "ref_csv": "../solar/work/oof/submission_A_uniform_30models.csv",
+        "cand_csv": "../solar/work/oof/submission_A2_min_comp_50.csv",
+        "ref_filaments": 1165,
+        "cand_filaments": 1165,
+        "delta_filaments": 0,
+        "images_changed": 13,
+        "unchanged_exact_rles": 1152,
+        "ref_rles_removed_or_changed": 13,
+        "cand_rles_added_or_changed": 13,
+        "pct_ref_instances_changed": 1.1158798283261802,
+        "total_rows": 1168,
+        "multi_comp_pred_count": 31,
+        "validator_passed": true
+      },
+      "min_comp_100": {
+        "ref_csv": "../solar/work/oof/submission_A_uniform_30models.csv",
+        "cand_csv": "../solar/work/oof/submission_A2_min_comp_100.csv",
+        "ref_filaments": 1165,
+        "cand_filaments": 1165,
+        "delta_filaments": 0,
+        "images_changed": 18,
+        "unchanged_exact_rles": 1145,
+        "ref_rles_removed_or_changed": 20,
+        "cand_rles_added_or_changed": 20,
+        "pct_ref_instances_changed": 1.7167381974248928,
+        "total_rows": 1168,
+        "multi_comp_pred_count": 24,
+        "validator_passed": true
+      }
+    },
+    "rule_B": {
+      "drop_multi": {
+        "ref_csv": "../solar/work/oof/submission_B_weighted_30models.csv",
+        "cand_csv": "../solar/work/oof/submission_B2_drop_multi.csv",
+        "ref_filaments": 1155,
+        "cand_filaments": 1120,
+        "delta_filaments": -35,
+        "images_changed": 35,
+        "unchanged_exact_rles": 1115,
+        "ref_rles_removed_or_changed": 40,
+        "cand_rles_added_or_changed": 5,
+        "pct_ref_instances_changed": 3.463203463203463,
+        "total_rows": 1123,
+        "multi_comp_pred_count": 0,
+        "validator_passed": true
+      },
+      "keep_largest": {
+        "ref_csv": "../solar/work/oof/submission_B_weighted_30models.csv",
+        "cand_csv": "../solar/work/oof/submission_B2_keep_largest.csv",
+        "ref_filaments": 1155,
+        "cand_filaments": 1157,
+        "delta_filaments": 2,
+        "images_changed": 35,
+        "unchanged_exact_rles": 1115,
+        "ref_rles_removed_or_changed": 40,
+        "cand_rles_added_or_changed": 42,
+        "pct_ref_instances_changed": 3.463203463203463,
+        "total_rows": 1160,
+        "multi_comp_pred_count": 0,
+        "validator_passed": true
+      },
+      "min_comp_50": {
+        "ref_csv": "../solar/work/oof/submission_B_weighted_30models.csv",
+        "cand_csv": "../solar/work/oof/submission_B2_min_comp_50.csv",
+        "ref_filaments": 1155,
+        "cand_filaments": 1155,
+        "delta_filaments": 0,
+        "images_changed": 8,
+        "unchanged_exact_rles": 1147,
+        "ref_rles_removed_or_changed": 8,
+        "cand_rles_added_or_changed": 8,
+        "pct_ref_instances_changed": 0.6926406926406926,
+        "total_rows": 1158,
+        "multi_comp_pred_count": 32,
+        "validator_passed": true
+      },
+      "min_comp_100": {
+        "ref_csv": "../solar/work/oof/submission_B_weighted_30models.csv",
+        "cand_csv": "../solar/work/oof/submission_B2_min_comp_100.csv",
+        "ref_filaments": 1155,
+        "cand_filaments": 1155,
+        "delta_filaments": 0,
+        "images_changed": 11,
+        "unchanged_exact_rles": 1143,
+        "ref_rles_removed_or_changed": 12,
+        "cand_rles_added_or_changed": 12,
+        "pct_ref_instances_changed": 1.0389610389610389,
+        "total_rows": 1158,
+        "multi_comp_pred_count": 29,
+        "validator_passed": true
+      }
+    }
+  }
+}

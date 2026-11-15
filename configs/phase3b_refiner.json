@@ -1,0 +1,113 @@
+{
+  "name": "phase3b_local_refiner",
+  "description": "Phase 3B Purely Local Authoritative Pipeline: 30-Model Mask R-CNN WMF + 5-Fold ResNet50 & ResNeXt101 Semantic UNets + ResidualCropRefinerUNet (160px) + WideContextRefinerUNetV2 (224px, pad=56) + 25-Booster LightGBM S27 Ranker (wref_uv1_t50)",
+  "base_ensemble_config": "configs/final_ensemble.json",
+  "stage1_clustering": {
+    "min_per_view_score": 0.25,
+    "wmf_iou_thresh": 0.40,
+    "min_cluster_score": 0.20,
+    "gamma": 1.5,
+    "family_weights": {
+      "clahe": 1.0,
+      "anchors5": 1.0,
+      "dice": 1.0,
+      "a5dice": 1.0,
+      "2048": 2.0,
+      "1792_clahe": 2.0
+    }
+  },
+  "semantic_priors": {
+    "resnet50_unet": {
+      "img_size": 1024,
+      "out_channels": 2,
+      "channels": ["fg", "core"],
+      "tta_flips": 4,
+      "checkpoints": [
+        "semantic_unet_f0_fp16.pt",
+        "semantic_unet_f1_fp16.pt",
+        "semantic_unet_f2_fp16.pt",
+        "semantic_unet_f3_fp16.pt",
+        "semantic_unet_f4_fp16.pt"
+      ]
+    },
+    "resnext101_unet": {
+      "img_size": 1280,
+      "out_channels": 3,
+      "channels": ["fg", "core", "edge"],
+      "tta_flips": 4,
+      "checkpoints": [
+        "resnext101_unet_f0_fp16.pt",
+        "resnext101_unet_f1_fp16.pt",
+        "resnext101_unet_f2_fp16.pt",
+        "resnext101_unet_f3_fp16.pt",
+        "resnext101_unet_f4_fp16.pt"
+      ]
+    }
+  },
+  "roi_refiners": {
+    "crop_refiner_v1": {
+      "in_channels": 6,
+      "base_channels": 32,
+      "crop_size": 160,
+      "u_box_pad": 12,
+      "tta_flips": 4,
+      "checkpoints": [
+        "phase3/crop_refiner_f0_fp16.pt",
+        "phase3/crop_refiner_f1_fp16.pt",
+        "phase3/crop_refiner_f2_fp16.pt",
+        "phase3/crop_refiner_f3_fp16.pt",
+        "phase3/crop_refiner_f4_fp16.pt"
+      ]
+    },
+    "wide_refiner_v2": {
+      "in_channels": 11,
+      "base_channels": 40,
+      "crop_size": 224,
+      "wide_box_pad": 56,
+      "tta_modes": ["id", "hflip", "vflip", "transpose"],
+      "checkpoints": [
+        "phase3/wide_refiner_v2_f0_fp16.pt",
+        "phase3/wide_refiner_v2_f1_fp16.pt",
+        "phase3/wide_refiner_v2_f2_fp16.pt",
+        "phase3/wide_refiner_v2_f3_fp16.pt",
+        "phase3/wide_refiner_v2_f4_fp16.pt"
+      ]
+    }
+  },
+  "ranker": {
+    "name": "LGB_S27_yhyb",
+    "metadata_file": "phase3/lgb_metadata.json",
+    "target": "target_y_hyb",
+    "seeds": [2026, 2027, 2028, 2029, 2030],
+    "folds": [0, 1, 2, 3, 4],
+    "num_boosters": 25,
+    "tau_score": 0.255
+  },
+  "mask_blending": {
+    "mode": "wref_uv1_t50",
+    "inner_weights": {
+      "crop_refiner_v1": 0.45,
+      "wide_refiner_v2": 0.42,
+      "resnet50_unet": 0.13
+    },
+    "outer_weight_wide_refiner_v2": 1.0,
+    "tau_mask": 0.50,
+    "nms_iou": 0.03,
+    "min_retained_ratio": 0.50,
+    "min_area_px": 10
+  },
+  "validation_metrics": {
+    "eval_scope": "707 OOF observations (strict 5-fold nested CV)",
+    "nested_oof_pq": 0.468754,
+    "nested_oof_sq": 0.6857,
+    "nested_oof_rq": 0.6836,
+    "nested_oof_tp": 5344,
+    "nested_oof_fp": 2091,
+    "nested_oof_fn": 2855,
+    "k1_pq": 0.471966,
+    "multi_pq": 0.466832,
+    "adv_auc_s27": 0.6206,
+    "test_filaments": 1170,
+    "test_rows": 1173
+  }
+}

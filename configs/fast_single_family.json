@@ -1,0 +1,57 @@
+{
+  "name": "fast_single_family_1536_clahe",
+  "description": "Fast Single-Family (1536px Multi-CLAHE, 4-Flip TTA) Demo & Inference Configuration",
+  "total_views": 4,
+  "family_views": {
+    "clahe": 4
+  },
+  "models": [
+    {
+      "id": "f0_1536",
+      "pruned_name": "r50_1536_clahe_f0.pt",
+      "checkpoint_relpath": "work/runs/r50_1536_clahe_e30/checkpoints/checkpoint_fold0_last.pt",
+      "family": "clahe",
+      "img_size": 1536,
+      "anchors5": false,
+      "views": 4,
+      "prob_shift": 0.0
+    }
+  ],
+  "decision_rules": {
+    "threshold": {
+      "tau_score": 0.850,
+      "tau_mask": 0.500
+    },
+    "scorer_v2": {
+      "tau_scorer": 0.2440,
+      "tau_mask": 0.525,
+      "features": [
+        "cluster_score",
+        "member_score_mean",
+        "prob_mean",
+        "prob_std",
+        "prob_sharpness_core",
+        "prob_sharpness_iqr",
+        "log_area",
+        "bbox_fill",
+        "aspect_ratio",
+        "rank_in_image",
+        "rel_score_to_max",
+        "n_cands_gt_05",
+        "score_clahe",
+        "score_a5",
+        "score_dice",
+        "family_score_std",
+        "n_families_active",
+        "unoccluded_area_ratio",
+        "max_iou_higher_rank"
+      ],
+      "weights_file": "scorer_v2_models.joblib"
+    }
+  },
+  "postprocessing": {
+    "disjoint_canvas": true,
+    "min_area_px": 10,
+    "min_retained_ratio": 0.50
+  }
+}
