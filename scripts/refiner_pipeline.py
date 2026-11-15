@@ -50,6 +50,7 @@ from scripts.common import (
     find_dataset_paths,
     get_autocast_context,
     get_maskrcnn_model,
+    get_stage1_autocast_context,
     preprocess_solar_image,
 )
 from scripts.instance_scorer import encode_crop_to_rle
@@ -1275,21 +1276,24 @@ def _infer_stage1_4tta_single(
     fam: str,
     device: torch.device,
     gpu_views: Optional[List[Tuple[Tuple[str, bool, bool], torch.Tensor]]] = None,
+    stage1_precision: str = "bf16",
 ) -> List[dict]:
     """Run 4-flip TTA Mask R-CNN inference on a single image tensor (no batch/neighbor mixing)."""
     views = gpu_views if gpu_views is not None else _build_4tta_views(base_t, device)
     scale_to_2048 = 2048.0 / float(sz)
     out_cands: List[dict] = []
     for (_, f_v, f_h), t_in in views:
-        with get_autocast_context(device):
+        with get_stage1_autocast_context(device, precision=stage1_precision):
             out = model([t_in])[0]
         scores = out["scores"]
         keep = scores >= 0.25
         if not keep.any():
+            del out, scores, keep
             continue
         scores_np = scores[keep].detach().cpu().numpy()
         boxes = out["boxes"][keep].clone()
         masks = out["masks"][keep]
+        del out, scores, keep
         if f_v:
             boxes[:, [1, 3]] = float(sz) - boxes[:, [3, 1]]
             masks = torch.flip(masks, dims=[-2])
@@ -1297,7 +1301,9 @@ def _infer_stage1_4tta_single(
             boxes[:, [0, 2]] = float(sz) - boxes[:, [2, 0]]
             masks = torch.flip(masks, dims=[-1])
         boxes_2048 = (boxes * scale_to_2048).detach().cpu().numpy()
+        del boxes
         masks_sq = masks.squeeze(1)
+        del masks
 
         valid: List[Tuple[int, int, int, int, int]] = []
         for k in range(len(scores_np)):
@@ -1309,15 +1315,17 @@ def _infer_stage1_4tta_single(
             if x2 > x1 and y2 > y1:
                 valid.append((k, x1, y1, x2, y2))
         if not valid:
+            del masks_sq
             continue
 
         # Upsample per-batch chunks (<=16 masks = <=256 MB) on GPU and coalesce
         # all ROI crops into a single FP16 device-to-host transfer per view.
+        crop_shapes = [(y2 - y1, x2 - x1) for _, x1, y1, x2, y2 in valid]
+        crop_sizes = [h * w for h, w in crop_shapes]
         if sz == FRAME_SIZE:
-            m_half = masks_sq.half()
-            crops = [m_half[k, y1:y2, x1:x2] for k, x1, y1, x2, y2 in valid]
+            flat_crops = [masks_sq[k, y1:y2, x1:x2].half().reshape(-1) for k, x1, y1, x2, y2 in valid]
         else:
-            crops = []
+            flat_crops = []
             for start in range(0, len(valid), 16):
                 batch_valid = valid[start : start + 16]
                 k_idxs = [v[0] for v in batch_valid]
@@ -1328,11 +1336,12 @@ def _infer_stage1_4tta_single(
                     align_corners=False,
                 )[:, 0].half()
                 for ii, (_, x1, y1, x2, y2) in enumerate(batch_valid):
-                    crops.append(m_full[ii, y1:y2, x1:x2])
+                    flat_crops.append(m_full[ii, y1:y2, x1:x2].reshape(-1).clone())
+                del m_full
+        del masks_sq
 
-        crop_sizes = [c.numel() for c in crops]
-        crop_shapes = [(c.shape[0], c.shape[1]) for c in crops]
-        flat_cpu = torch.cat([c.reshape(-1) for c in crops]).detach().cpu().numpy()
+        flat_cpu = torch.cat(flat_crops).detach().cpu().numpy()
+        del flat_crops
         off = 0
         for (k, x1, y1, x2, y2), sz_c, sh_c in zip(valid, crop_sizes, crop_shapes):
             out_cands.append({
@@ -1342,6 +1351,7 @@ def _infer_stage1_4tta_single(
                 "family": fam,
             })
             off += sz_c
+        del flat_cpu
     return out_cands
 
 
@@ -1355,8 +1365,9 @@ def _collect_stage1_candidates_from_weights(
     verify_fp16: bool = False,
     loaded_log: Optional[List[str]] = None,
     stage1_cache_dir: Optional[Union[str, Path]] = None,
+    stage1_precision: str = "bf16",
 ) -> Dict[str, List[dict]]:
-    """Run all 30 Mask R-CNN checkpoints (4-flip TTA, strict FP32) with bounded host RAM."""
+    """Run all 30 Mask R-CNN checkpoints (4-flip TTA, 'bf16' autocast or strict 'fp32') with bounded host RAM."""
     models = cfg["models"]
     raw_by_stem: Dict[str, List[dict]] = {s: [] for s in stems}
     needed_sizes = sorted({int(m["img_size"]) for m in models})
@@ -1364,6 +1375,16 @@ def _collect_stage1_candidates_from_weights(
     s1_cache_path = Path(stage1_cache_dir) if stage1_cache_dir else None
     if s1_cache_path is not None:
         s1_cache_path.mkdir(parents=True, exist_ok=True)
+        prec_file = s1_cache_path / ".stage1_precision"
+        if prec_file.is_file():
+            prev_prec = prec_file.read_text().strip()
+            if prev_prec != stage1_precision:
+                raise ValueError(
+                    f"Stage-1 cache dir '{s1_cache_path}' recorded precision '{prev_prec}', "
+                    f"cannot resume with '{stage1_precision}'. Use a separate --stage1-cache-dir."
+                )
+        else:
+            prec_file.write_text(f"{stage1_precision}\n")
         pending_stems = [s for s in stems if not (s1_cache_path / f"{s}.pkl").is_file()]
         if len(pending_stems) < len(stems):
             print(
@@ -1401,11 +1422,18 @@ def _collect_stage1_candidates_from_weights(
                         for sz in needed_sizes
                     }
                     stem_cands: List[dict] = []
-                    for _, fam, sz, model in loaded:
+                    for m_i, (_, fam, sz, model) in enumerate(loaded, start=1):
                         stem_cands.extend(
-                            _infer_stage1_4tta_single(model, None, sz=sz, fam=fam, device=device, gpu_views=views_by_sz[sz])
+                            _infer_stage1_4tta_single(
+                                model, None, sz=sz, fam=fam, device=device,
+                                gpu_views=views_by_sz[sz], stage1_precision=stage1_precision,
+                            )
                         )
+                        if device.type == "cuda" and (sz == 2048 or m_i % 6 == 0):
+                            torch.cuda.empty_cache()
                     del views_by_sz
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
                     if s1_cache_path is not None:
                         tmp_p = s1_cache_path / f"{stem}.pkl.tmp"
                         with open(tmp_p, "wb") as f:
@@ -1445,7 +1473,10 @@ def _collect_stage1_candidates_from_weights(
                             )
                             for s in chunk_stems:
                                 raw_by_stem[s].extend(
-                                    _infer_stage1_4tta_single(model, prepped[s], sz=sz, fam=m["family"], device=device)
+                                    _infer_stage1_4tta_single(
+                                        model, prepped[s], sz=sz, fam=m["family"], device=device,
+                                        stage1_precision=stage1_precision,
+                                    )
                                 )
                             del model
                             gc.collect()
@@ -1698,6 +1729,8 @@ def run_phase3b_pipeline(
     strict_weights_only: bool = False,
     verify_fp16: bool = False,
     loaded_log: Optional[List[str]] = None,
+    stage1_precision: str = "bf16",
+    stage1_cache_dir: Optional[Union[str, Path]] = None,
 ) -> Tuple[pd.DataFrame, Dict]:
     """Execute full Phase 3B Local pipeline (Stage 1 -> Semantic UNets -> V1/V2 Refiners -> LGB -> RLE)."""
     if device_str == "auto":
@@ -1732,7 +1765,7 @@ def run_phase3b_pipeline(
 
     stems = [p.stem for p in image_paths]
     print(
-        f"[Phase 3B Local] Device={device} (strict float32) | Images={len(stems)} | "
+        f"[Phase 3B Local] Device={device} (stage1={stage1_precision}, phase3=float32) | Images={len(stems)} | "
         f"use_cache={use_cache} | strict_weights={strict_weights_only}",
         flush=True,
     )
@@ -1760,6 +1793,7 @@ def run_phase3b_pipeline(
         raw_by_stem = _collect_stage1_candidates_from_weights(
             stems, img_by_stem, cfg, w_dir, device,
             strict_weights_only=strict_weights_only, verify_fp16=verify_fp16, loaded_log=loaded_log,
+            stage1_cache_dir=stage1_cache_dir, stage1_precision=stage1_precision,
         )
 
     return run_phase3b_from_stage1(
@@ -1789,6 +1823,19 @@ def main():
     parser.add_argument("--device", type=str, default="auto", help="'auto', 'cuda', or 'cpu'")
     parser.add_argument("--limit", type=int, default=None, help="Process at most N images")
     parser.add_argument("--tau", type=float, default=0.255, help="LightGBM acceptance threshold")
+    parser.add_argument(
+        "--stage1-precision",
+        type=str,
+        choices=["bf16", "fp32"],
+        default="bf16",
+        help="Stage-1 Mask R-CNN inference precision: 'bf16' (default, matches Kaggle test_cache) or 'fp32' (strict float32).",
+    )
+    parser.add_argument(
+        "--stage1-cache-dir",
+        type=str,
+        default=None,
+        help="Optional per-stem checkpoint directory for resumable Stage-1 inference",
+    )
     args = parser.parse_args()
 
     paths = find_dataset_paths()
@@ -1807,6 +1854,8 @@ def main():
         tau=args.tau,
         strict_weights_only=args.strict_weights,
         verify_fp16=args.strict_weights,
+        stage1_precision=args.stage1_precision,
+        stage1_cache_dir=args.stage1_cache_dir,
     )
     df_sub.to_csv(out_path, index=False)
     print(f"[Saved] {out_path} ({stats['total_rows']} rows, {stats['total_filaments']} filaments in {stats['elapsed_s']}s)")

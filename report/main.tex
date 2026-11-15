@@ -43,7 +43,7 @@
 \email{adampipal22@gmail.com}
 
 \begin{abstract}
-    This report describes our solution to the Solar Filament Segmentation Challenge~2026, a Kaggle competition on automatic segmentation of solar filaments in GONG H-$\alpha$ observations. Our pipeline combines a six-family Mask~R-CNN proposal ensemble (30~checkpoints evaluated across four flip views via Weighted Mask Fusion), full-disk \texttt{ResNet50} and \texttt{ResNeXt101} semantic U-Net priors, dual target-aligned ROI boundary refiners (\texttt{ResidualCropRefinerUNet} and wide-context \texttt{WideContextRefinerUNetV2}), a 25-booster 5-fold cross-fitted LightGBM ranker, and greedy pixel-disjoint canvas painting. Across strict observation-grouped 5-fold cross-validation over all 707 training observations (1,154 annotator records; 8,199 ground-truth filaments), nested refinement and scoring lift pooled Panoptic Quality (PQ) from \textbf{0.4521} \texttt{[nested]} / \textbf{0.4543} \texttt{[in-sample]} (Rule~B, Public LB \textbf{0.40}) to \textbf{0.4688} \texttt{[nested]} (Rule~C / Phase~3B Local, $\text{SQ}=0.6857$, $\text{RQ}=0.6836$, paired bootstrap $P=1.000$, Public LB \textbf{0.41}), with zero pixel overlaps across predicted instances and all 81 FP16 checkpoints stored in-repo ($<100\text{ MB}$ each).
+    This report describes our solution to the Solar Filament Segmentation Challenge~2026, a Kaggle competition on automatic segmentation of solar filaments in GONG H-$\alpha$ observations. Our pipeline combines a six-family Mask~R-CNN proposal ensemble (30~checkpoints evaluated across four flip views via Weighted Mask Fusion), full-disk \texttt{ResNet50} and \texttt{ResNeXt101} semantic U-Net priors, dual target-aligned ROI boundary refiners (\texttt{ResidualCropRefinerUNet} and wide-context \texttt{WideContextRefinerUNetV2}), a 25-booster 5-fold cross-fitted LightGBM ranker, and greedy pixel-disjoint canvas painting. Across strict observation-grouped 5-fold cross-validation over all 707 training observations (1,154 annotator records; 8,199 ground-truth filaments), nested refinement and scoring lift pooled Panoptic Quality (PQ) from \textbf{0.4521} \texttt{[nested]} / \textbf{0.4543} \texttt{[in-sample]} (Rule~B, Public LB \textbf{0.40}, Selected~\#2) to \textbf{0.4688} \texttt{[nested]} (95\% CI $[0.4597, 0.4777]$, Rule~C / Phase~3B Local, $\text{SQ}=0.6857$, $\text{RQ}=0.6836$, Public LB \textbf{0.41}, Selected~\#1), with zero pixel overlaps across predicted instances and all 81 FP16/sharded checkpoints stored in-repo ($<100\text{ MB}$ each).
 \end{abstract}
 
 \maketitle
@@ -60,7 +60,7 @@ Guide mode is on.}
 \section{Introduction}
     This report goes over the details of our submitted solution to the Solar Filament Segmentation Challenge~2026 \cite{filament-segmentation-2026}. The challenge, launched on July~10,~2026, is organized by the Earth-Space AI Research (ESAIR) Lab\footnote{\href{https://www.esairlab.com/home}{www.esairlab.com/}}. This challenge utilizes the MAGFiLO dataset for evaluation of the segmentation algorithms \cite{ahmadzadeh2024dataset}. Our reproducible codebase and model weights are released at \url{https://github.com/Harru230/solar}.
 
-    Segmenting filaments in $2048\times 2048$ H-$\alpha$ filtergrams presents three primary failure modes: extreme aspect ratios and thin ($<5\text{ px}$) structures lost under coarse $28\times 28$ RoI mask heads, boundary discretization mismatches relative to COCO vector polygon targets, and inter-annotator variance across partially overlapping or fragmented threads. We address these via multi-resolution detection diversity, full-frame plus ROI boundary refinement trained directly on official \texttt{frPyObjects} targets, and non-drifting cross-fitted instance selection.
+    Segmenting filaments in $2048\times 2048$ H-$\alpha$ filtergrams presents three primary failure modes: extreme aspect ratios and thin ($<5\text{ px}$) structures lost under coarse $28\times 28$ RoI mask heads, boundary discretization mismatches relative to COCO vector polygon targets, and inter-annotator variance across partially overlapping or fragmented threads. We address these via multi-resolution detection diversity, full-frame plus ROI boundary refinement trained directly on official \texttt{frPyObjects} targets, and cross-fitted gradient-boosted instance selection.
 
 
 % ==================================== %
@@ -71,16 +71,16 @@ Guide mode is on.}
 
 \begin{figure*}[t]
     \centering
-    \includegraphics[width=0.95\textwidth]{figures/pipeline_diagram.png}
+    \includegraphics[width=0.90\textwidth]{figures/pipeline_diagram.png}
     \caption{End-to-end pipeline: deterministic multi-scale CLAHE preprocessing feeds a 30-checkpoint Mask~R-CNN proposal ensemble and full-disk semantic U-Nets, followed by \texttt{frPyObjects}-aligned ROI boundary refinement, LightGBM scoring, and pixel-disjoint painting.}
     \label{fig:pipeline}
 \end{figure*}
 
     \subsection{Preprocessing and Validation Split}
-    Raw $2048\times 2048$ grayscale H-$\alpha$ images are mapped deterministically to three channels: linear intensity $I/255$, fine CLAHE (clip limit $2.0$, $8\times 8$ tiles), and coarse CLAHE ($4.0$, $16\times 16$). The 707 training observations (1,154 annotator records; 296 multi-annotator observations; 8,199 ground-truth polygons) are split into five observation-disjoint folds; median nearest-neighbor temporal separation is $46.4\text{ h}$ in CV versus $36.7\text{ h}$ between test (180 images) and training data.
+    Raw $2048\times 2048$ grayscale H-$\alpha$ images are mapped deterministically to three channels: linear intensity $I/255$, fine CLAHE (clip limit $2.0$, $8\times 8$ tiles), and coarse CLAHE ($4.0$, $16\times 16$). The 707 training observations (1,154 annotator records; 296 multi-annotator observations; 8,199 ground-truth polygons) are split into five observation-disjoint folds; median nearest-neighbor temporal separation is $46.4\text{ h}$ in CV versus $36.7\text{ h}$ between test (180 images) and training data (analysis only, not used at inference).
 
     \subsection{Multi-Family Detection \& Weighted Mask Fusion}
-    We fine-tune six Mask~R-CNN (\texttt{ResNet50-FPN v2}) families \cite{he2017mask,he2016deep} across all 5~folds (30 checkpoints total; 30~epochs AdamW, \texttt{bfloat16} AMP training, mandatory strict \texttt{float32} inference): \texttt{clahe} ($1536$, 3~anchors, BCE), \texttt{anchors5} ($1536$, 5~anchors, BCE), \texttt{dice} ($1536$, 3~anchors, BCE+Soft Dice), \texttt{a5dice} ($1536$, 5~anchors, BCE+Soft Dice), \texttt{1792\_clahe} ($1792$, 3~anchors, BCE), and \texttt{2048} ($2048$, 3~anchors, BCE). Each model runs 4-flip TTA (\texttt{id, h, v, hv} = 24 views/image in OOF; 120 in test). Proposals $\ge 0.25$ are rescaled as $\tilde{s}_i = s_i^\gamma w_{\text{fam}(i)}$ ($w=2.0$ for \texttt{2048}/\allowbreak\texttt{1792\_clahe}, $\gamma=1.5$ in Rule~B) and greedily clustered ($\text{mask IoU} > 0.40$) into soft probability maps $\bar{P}_c$. All candidates with cluster score $\ge 0.20$ enter the refinement pool (7,803 OOF; 2,074 test).
+    We fine-tune six Mask~R-CNN (\texttt{ResNet50-FPN v2}) families \cite{he2017mask,he2016deep} across all 5~folds (30 checkpoints total; 30~epochs AdamW, \texttt{bfloat16} AMP training, \texttt{bfloat16} autocast Stage-1 inference by default to match competition test caching, with optional strict \texttt{float32} mode giving $+0.0033$ Fold-0 PQ): \texttt{clahe} ($1536$, 3~anchors, BCE), \texttt{anchors5} ($1536$, 5~anchors, BCE), \texttt{dice} ($1536$, 3~anchors, BCE+Soft Dice), \texttt{a5dice} ($1536$, 5~anchors, BCE+Soft Dice), \texttt{1792\_clahe} ($1792$, 3~anchors, BCE), and \texttt{2048} ($2048$, 3~anchors, BCE). Each model runs 4-flip TTA (\texttt{id, h, v, hv} = 24 views/image in OOF; 120 in test). Proposals $\ge 0.25$ are rescaled as $\tilde{s}_i = s_i^\gamma w_{\text{fam}(i)}$ ($w=2.0$ for \texttt{2048}/\allowbreak\texttt{1792\_clahe}, $\gamma=1.5$ in Rule~B) and greedily clustered ($\text{mask IoU} > 0.40$) into soft probability maps $\bar{P}_c$. All candidates with cluster score $\ge 0.20$ enter the refinement pool (7,803 OOF; 2,074 test).
 
     \subsection{Semantic Priors and Target-Aligned Refiners}
     While Mask~R-CNN excels at localization, its $28\times 28$ RoI head thickens predictions (10.6~px vs 8.3~px GT width) and leaves fine boundaries blurred relative to \texttt{pycocotools} \texttt{frPyObjects} polygon masks used by official evaluation:
@@ -107,30 +107,30 @@ Guide mode is on.}
     All OOF scores follow the official competition engine (\texttt{pq\_eval.py}): each (annotator, observation) record is matched independently against unique predictions at $\text{IoU} > 0.50$, and $\text{PQ} = \text{SQ} \times \text{RQ}$ is pooled across all 707 observations (1,154 records, 8,199 GT masks).
 
 \begin{table}[t]
-    \caption{Progression across 5-fold OOF (707 obs, 1,154 records) and 180-image Test. Nested threshold $\tau$ is tuned strictly out-of-fold.}
+    \caption{5-fold OOF progression (707 obs, 1,154 records) with 10,000-resample 95\% bootstrap CIs ($\text{SE}\approx 0.0044\text{--}0.0046$ in OOF; test finite-sample $\text{SE}=0.0111$ at $N=180$). Rules~A, B, and C were all submitted on Kaggle; Final Selected Pair = \texttt{Rule~C} (\texttt{Sel.\,\#1}) + \texttt{Rule~B} (\texttt{Sel.\,\#2}).}
     \label{tab:results}
     \centering
     \small
     \resizebox{\linewidth}{!}{%
-    \begin{tabular}{@{}lcccc@{}}
+    \begin{tabular}{@{}lccccc@{}}
         \toprule
-        Configuration & Eval Tag & PQ & SQ / RQ & Preds (Test) \\
+        Configuration & Tag & PQ & 95\% CI & SQ / RQ & Preds (Test LB) \\
         \midrule
-        Single \texttt{1536 clahe} (4-TTA) & \texttt{[in-sample]} & 0.4338 & 0.6687 / 0.6487 & — \\
-        Single \texttt{2048 BCE} (4-TTA) & \texttt{[nested]} & 0.4400 & 0.6731 / 0.6537 & — \\
-        6-Fam Rule A (Uniform WMF) & \texttt{[nested]} & 0.4508 & 0.6761 / 0.6668 & 1,165 (LB 0.39) \\
-        6-Fam Rule B (Weighted WMF) & \texttt{[nested]} & 0.4521 & 0.6777 / 0.6672 & — \\
-        6-Fam Rule B (Fixed Global) & \texttt{[in-sample]} & 0.4543 & 0.6773 / 0.6708 & 1,155 (LB 0.40) \\
-        Phase 2 Local (\texttt{CropV1 + LGB}) & \texttt{[nested]} & 0.4676 & — & — \\
-        \textbf{Phase 3B Local Winner (\texttt{Rule C})} & \texttt{[nested]} & \textbf{0.4688} & \textbf{0.6857 / 0.6836} & \textbf{1,170 (LB 0.41)} \\
-        Hybrid A100 (\texttt{ConvNeXt V1 + S27}) & \texttt{[nested]} & 0.4692 & 0.6858 / 0.6841 & 1,182 (LB 0.40, cache) \\
+        Single \texttt{1536 clahe} (4-TTA) & \texttt{[in-sample]} & 0.4338 & [0.4252, 0.4425] & 0.6687 / 0.6487 & — \\
+        Single \texttt{2048 BCE} (4-TTA) & \texttt{[nested]} & 0.4400 & [0.4318, 0.4486] & 0.6731 / 0.6537 & — \\
+        6-Fam Rule A (Uniform WMF) & \texttt{[nested]} & 0.4508 & [0.4422, 0.4596] & 0.6761 / 0.6668 & 1,165 (0.39, sub.) \\
+        6-Fam Rule B (Weighted WMF) & \texttt{[nested]} & 0.4521 & [0.4432, 0.4613] & 0.6777 / 0.6672 & — \\
+        6-Fam Rule B (Fixed Global) & \texttt{[in-sample]} & 0.4543 & [0.4451, 0.4634] & 0.6773 / 0.6708 & 1,155 (0.40, Sel.\,\#2) \\
+        Phase 2 Local (\texttt{CropV1 + LGB}) & \texttt{[nested]} & 0.4676 & [0.4586, 0.4766] & 0.6857 / 0.6819 & — \\
+        \textbf{Phase 3B Local (\texttt{Rule C})} & \texttt{[nested]} & \textbf{0.4688} & \textbf{[0.4597, 0.4777]} & \textbf{0.6857 / 0.6836} & \textbf{1,170 (0.41, Sel.\,\#1)} \\
+        Hybrid A100 (\texttt{ConvNeXt V1 + S27}) & \texttt{[nested]} & 0.4692 & [0.4601, 0.4781] & 0.6858 / 0.6841 & 1,182 (0.40, ext.) \\
         \bottomrule
     \end{tabular}%
     }
 \end{table}
 
 \begin{table}[t]
-    \caption{707-image OOF distributions and matching audit (Rule~B \texttt{[in-sample]} baseline vs Phase~3B Local \texttt{Rule C} \texttt{[nested]}).}
+    \caption{707-image OOF distributions and matching audit (Rule~B \texttt{[in-sample]} vs Phase~3B \texttt{Rule C} \texttt{[nested]}).}
     \label{tab:distributions}
     \centering
     \small
@@ -140,13 +140,10 @@ Guide mode is on.}
         Metric (707 OOF Images) & Mean $\pm$ Std & Median & [p25, p75] & Tail / Note \\
         \midrule
         Per-Image PQ (Rule~B, \texttt{[in-sample]}) & $0.4457 \pm 0.1494$ & 0.4585 & [0.374, 0.543] & max 0.8072 \\
-        Per-Image Union Dice (Rule~B, \texttt{[in-sample]}) & $0.6541 \pm 0.1570$ & 0.6887 & [0.603, 0.753] & p95 0.8110 \\
-        Per-Image Union Dice (\texttt{Rule C}, \texttt{[nested]}) & \textbf{0.6639} & \textbf{0.7002} & — & $k=1$ mean 0.6557 \\
+        Per-Image Union Dice (Rule~B / \texttt{C}) & $0.6541$ / \textbf{0.6639} & 0.6887 / \textbf{0.7002} & [0.603, 0.753] (B) & $k=1$ mean 0.6557 (C) \\
         Per-Image Union IoU (Rule~B, \texttt{[in-sample]}) & $0.5044 \pm 0.1465$ & 0.5265 & [0.434, 0.605] & p95 0.6821 \\
-        Matched TP Inst IoU (Rule~B, \texttt{[in-sample]}) & 0.6773 & 0.6808 & [0.615, 0.744] & max 0.907 \\
-        Matched TP Inst IoU (\texttt{Rule C}, \texttt{[nested]}) & \textbf{0.6857} & \textbf{0.6911} & — & TP 5,344 / FP 2,091 \\
-        Matched TP Inst Dice (Rule~B, \texttt{[in-sample]}) & 0.8045 & 0.8101 & [0.761, 0.853] & max 0.951 \\
-        GT Split / Pred Merge ($\text{IoU}>0.15$, \texttt{Rule C}) & 1.32\% / 1.60\% & — & — & GT multi-hit 0\% (A/B) \\
+        Matched TP Inst IoU (Rule~B / \texttt{C}) & 0.6773 / \textbf{0.6857} & 0.6808 / \textbf{0.6911} & [0.615, 0.744] (B) & TP 5,344 / FP 2,091 (C) \\
+        GT Split / Pred Merge ($\text{IoU}>0.15$, \texttt{C}) & 1.32\% / 1.60\% & — & — & GT multi-hit 0\% (A/B) \\
         Pred multi-hit ($\text{IoU}>0.5$, Rule~B) & 1 / 7,497 (0.013\%) & — & — & bridge 2.84\% ($\text{IoU}>0$) \\
         \bottomrule
     \end{tabular}%
@@ -154,31 +151,26 @@ Guide mode is on.}
 \end{table}
 
     \subsection{Quantitative Gain, Uncertainty \& Drift Checks}
-    Table~\ref{tab:results} summarizes progression: full Phase~3B local refinement (\texttt{Rule C}, \texttt{wref\_\allowbreak uv1\_t50}) lifts pooled \texttt{[nested]} PQ by \textbf{+0.0166} over \texttt{[nested]} Rule~B ($0.4521 \rightarrow 0.4688$) and by \textbf{+0.0144} over \texttt{[in-sample]} Rule~B ($0.4543 \rightarrow 0.4688$; $\text{TP}=5{,}344, \text{FP}=2{,}091, \text{FN}=2{,}855$, single-annotator $k=1$ PQ $0.4720$, multi $0.4668$), and by $+0.0012$ ($P=0.9677$) over Phase~2 Local. An auxiliary external-cache \texttt{ConvNeXt\allowbreak AttnRefinerNet} hybrid reaches $0.4692$ \texttt{[nested]} ($\text{SQ}=0.6858, \text{RQ}=0.6841$, Public LB $0.40$) but is omitted in favor of \texttt{Rule C} (Public LB \textbf{0.41}) to guarantee 100\% self-contained in-repo FP16 checkpoint reproducibility; Stage-2 uncovered-filament recovery yielded no significant net PQ gain and was likewise omitted. Across 10,000 image-level bootstrap resamples, the \texttt{Rule C} gain over Rule~B is decisive ($P=1.000$, 95\% CI $[+0.0114, +0.0175]$). Figures~\ref{fig:error_morph}--\ref{fig:matching_err} show baseline distributions, morphology stratification, and matching errors; adversarial OOF-vs-Test LightGBM AUC is $0.5077$ on detector features and $0.6206$ on S27 features (multiplicity ratio $1.008\times$: $1{,}170/180$ vs $4{,}559/707$, primary-scale KS $p \ge 0.538$ and all 15 morphological metrics $p \ge 0.051$). Regenerating all 180 test images in strict \texttt{FP32} from the 81 in-repo \texttt{FP16} checkpoints confirms parity against the Kaggle CSVs (mean union/instance IoU \textbf{0.961}/\textbf{0.970} for the single Selected final submission \texttt{submission\_phase3b\_local.csv}, and $0.943/0.957$, $0.932/0.954$ for Rule~B/A ablations relative to the original \texttt{bfloat16}-cached baseline).
+    Table~\ref{tab:results} summarizes progression: full Phase~3B local refinement (\texttt{Rule C}, \texttt{wref\_\allowbreak uv1\_t50}) lifts pooled \texttt{[nested]} PQ by \textbf{+0.0166} over \texttt{[nested]} Rule~B ($0.4521 \rightarrow 0.4688$) and by \textbf{+0.0144} over \texttt{[in-sample]} Rule~B ($0.4543 \rightarrow 0.4688$; $\text{TP}=5{,}344, \text{FP}=2{,}091, \text{FN}=2{,}855$, single-annotator $k=1$ PQ $0.4720$, multi $0.4668$), and by $+0.0012$ ($P=0.9677$) over Phase~2 Local. An auxiliary external-cache \texttt{ConvNeXt\allowbreak AttnRefinerNet} hybrid reaches $0.4692$ \texttt{[nested]} ($\text{SQ}=0.6858, \text{RQ}=0.6841$, Public LB $0.40$) but is omitted in favor of \texttt{Rule C} (Public LB \textbf{0.41}) to guarantee 100\% self-contained in-repo FP16 checkpoint reproducibility; Stage-2 uncovered-filament recovery yielded no significant net PQ gain and was likewise omitted. Across 10,000 image-level bootstrap resamples, \texttt{Rule C} achieves an OOF bootstrap gain of $+0.0166$ ($95\%$ CI $[+0.0133, +0.0199]$, $P=1.000$) over \texttt{[nested]} Rule~B and $+0.0144$ ($95\%$ CI $[+0.0114, +0.0175]$, $P=1.000$) over \texttt{[in-sample]} Rule~B; because $20+$ refinement and ranker variants were evaluated on the same 707 OOF observations, post-selection optimism applies and the Public LB difference between our Final Selected Pair (\texttt{Rule C} at $0.41$ vs.\ \texttt{Rule B} at $0.40$) lies within the $N=180$ test-set sampling noise ($\text{SE} \approx \pm 0.0111$, difference $\approx \pm 0.014$). Table~\ref{tab:distributions} and Figures~\ref{fig:morph_strat}--\ref{fig:matching_err} summarize OOF distributions, morphology stratification, and matching errors; adversarial OOF-vs-Test LightGBM AUC is $0.5077$ on detector features and $0.6206$ on S27 features (multiplicity ratio $1.008\times$: $1{,}170/180$ vs $4{,}559/707$, primary-scale KS $p \ge 0.538$ and all 15 morphological metrics $p \ge 0.051$). Regenerating all 180 test images from the 81 in-repo \texttt{FP16} checkpoints with default \texttt{--stage1-precision bf16} closely reproduces all three Kaggle-submitted CSVs: for the Final Selected Pair \texttt{submission\_phase3b\_local.csv} (\texttt{Rule C}, LB $0.41$) and \texttt{submission\_B\_weighted\_30models.csv} (\texttt{Rule B}, LB $0.40$), filament counts match within $99.83\%$ ($1{,}172$ vs.\ $1{,}170$, cross-run $\text{PQ}=\mathbf{0.9873}$, mean/median union IoU $\mathbf{0.9875}/\mathbf{0.9958}$, Hungarian instance IoU $\mathbf{0.9921}$) and $99.91\%$ ($1{,}154$ vs.\ $1{,}155$, cross-run $\text{PQ}=\mathbf{0.9891}$, union/instance IoU $\mathbf{0.9877}/\mathbf{0.9938}$), and for submitted \texttt{Rule A} (LB $0.39$) within $99.83\%$ ($1{,}167$ vs.\ $1{,}165$, cross-run $\text{PQ}=0.9818$, union/instance IoU $0.9779/0.9920$); optional \texttt{--stage1-precision fp32} yields cross-run $\text{PQ}=0.9474$ ($1{,}213$ vs.\ $1{,}170$ filaments, union/instance IoU $0.9605/0.9696$).
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\linewidth]{figures/oof_pq_dice_iou_distributions.png}
-    \caption{OOF per-image PQ, Union Dice, and Union IoU distributions across all 707 training observations.}
-    \label{fig:error_morph}
-\end{figure}
-
-\begin{figure}[t]
-    \centering
-    \includegraphics[width=\linewidth]{figures/morphology_stratified_pq.png}
+    \includegraphics[width=0.95\linewidth]{figures/morphology_stratified_pq.png}
     \caption{Stratified OOF Panoptic Quality by filament area, mean width, and PCA elongation.}
     \label{fig:morph_strat}
 \end{figure}
 
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\linewidth]{figures/matching_and_error_decomposition.png}
+    \includegraphics[width=0.95\linewidth]{figures/matching_and_error_decomposition.png}
     \caption{One-to-one vs multi-hit matching counts and TP/FP/FN morphological signatures across 707 OOF observations.}
     \label{fig:matching_err}
 \end{figure}
 
-    \subsection{Failure Modes, Limitations \& Future Work}
-    Morphological audit highlights sharp recall degradation on hyper-thin filaments ($\text{width} < 5\text{ px}$: PQ $0.3773$) and small regions ($\text{area} < 300\text{ px}^2$: PQ $0.2483$), whereas large filaments reach PQ $0.5072$. Multi-component predicted masks (5.71\% in OOF vs 0.37\% in GT) contribute concentrated False Positives ($\text{PQ}=0.1021$), and switching GT rasterization from official \texttt{frPyObjects} to \texttt{cv2.\allowbreak fillPoly} shifts nested 5-family PQ by $+0.0152$--$+0.0178$ ($0.4531 \rightarrow 0.4683$ and $0.4471 \rightarrow 0.4649$). Finally, single-annotator ground truth across 180 test images induces per-image variance ($\text{std}=0.1494$ in Rule~B OOF) relative to pooled multi-annotator CV ($0.4521$ \texttt{[nested]} / $0.4543$ \texttt{[in-sample]} vs $0.40$ LB; \texttt{Rule C} $0.4688$ \texttt{[nested]} vs $0.41$ LB). Future gains center on native $2048^2$ \texttt{frPyObjects}-supervised anchor detectors (\texttt{ResNeXt101-\allowbreak FPN}) to recover undetected sub-$5\text{ px}$ threads directly.
+    \subsection{Strengths, Failure Modes, Limitations \& Future Work}
+    \textbf{Strengths.} Every stage uses leakage-free observation-grouped 5-fold CV and modular standard components (\texttt{ResNet50-FPN v2}, full-disk U-Nets, lightweight LightGBM) with strict pixel-disjointness (zero GT multi-hit overlaps), reaches consensus accuracy ($0.4688$ OOF; $0.41$ Public LB) well above pairwise inter-annotator agreement ($0.3411$ across 296 multi-annotator observations), and stores all 81 FP16/sharded checkpoints ($<100\text{ MB}$ each) in-repo for offline reproduction of both Selected Kaggle submissions (\texttt{Rule C} + \texttt{Rule B}).
+
+    \textbf{Failure Modes \& Limitations.} Morphological audit highlights sharp recall degradation on hyper-thin filaments ($\text{width} < 5\text{ px}$: PQ $0.3773$) and small regions ($\text{area} < 300\text{ px}^2$: PQ $0.2483$), whereas large filaments reach PQ $0.5072$. Multi-component predicted masks (5.71\% in OOF vs 0.37\% in GT) contribute concentrated False Positives ($\text{PQ}=0.1021$), and switching GT rasterization from official \texttt{frPyObjects} to \texttt{cv2.\allowbreak fillPoly} shifts nested 5-family PQ by $+0.0152$--$+0.0178$ ($0.4531 \rightarrow 0.4683$ and $0.4471 \rightarrow 0.4649$). Finally, single-annotator ground truth across 180 test images induces per-image variance ($\text{std}=0.1494$ in Rule~B OOF, $\text{SE}=0.0111$ at $N=180$) relative to pooled multi-annotator CV ($0.4521$ \texttt{[nested]} / $0.4543$ \texttt{[in-sample]} vs $0.40$ LB; \texttt{Rule C} $0.4688$ \texttt{[nested]} vs $0.41$ LB). Future gains center on native $2048^2$ \texttt{frPyObjects}-supervised anchor detectors (\texttt{ResNeXt101-\allowbreak FPN}) to recover undetected sub-$5\text{ px}$ threads directly.
 
 
 % ==================================== %

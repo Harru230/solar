@@ -51,6 +51,7 @@ from scripts.common import (
     find_dataset_paths,
     get_autocast_context,
     get_maskrcnn_model,
+    get_stage1_autocast_context,
     preprocess_solar_image,
 )
 from scripts.instance_scorer import encode_crop_to_rle
@@ -571,6 +572,7 @@ def run_joint_full_mode(
     strict_weights_only: bool = True,
     verify_fp16: bool = True,
     stage1_cache_dir: Optional[str] = None,
+    stage1_precision: str = "bf16",
 ) -> Tuple[Dict[str, Tuple[pd.DataFrame, dict]], List[str]]:
     """Run Stage-1 30 FP16 Mask R-CNN models once on GPU/CPU and materialize requested rules."""
     from scripts.refiner_pipeline import _collect_stage1_candidates_from_weights, run_phase3b_from_stage1
@@ -599,10 +601,12 @@ def run_joint_full_mode(
     t0 = time.time()
     loaded_log: List[str] = []
     w_path = Path(weights_dir)
+    print(f"[Joint Full Mode] device={device} | stage1_precision={stage1_precision} | strict_weights={strict_weights_only}", flush=True)
     raw_by_stem = _collect_stage1_candidates_from_weights(
         stems, img_by_stem, cfg, w_path, device,
         strict_weights_only=strict_weights_only, verify_fp16=verify_fp16,
         loaded_log=loaded_log, stage1_cache_dir=stage1_cache_dir,
+        stage1_precision=stage1_precision,
     )
     stage1_elapsed = time.time() - t0
 
@@ -642,6 +646,7 @@ def run_full_mode(
     limit: Optional[int] = None,
     config_path: Optional[str] = None,
     strict_weights_only: bool = False,
+    stage1_precision: str = "bf16",
 ) -> Tuple[pd.DataFrame, dict]:
     """Full neural network inference from model weights with CPU fallback."""
     if device_str == "auto":
@@ -649,7 +654,7 @@ def run_full_mode(
     else:
         device = torch.device(device_str)
 
-    print(f"[Full Mode] Running inference on device: {device} (strict_weights={strict_weights_only})...")
+    print(f"[Full Mode] Running inference on device: {device} (stage1_precision={stage1_precision}, strict_weights={strict_weights_only})...")
 
     test_files = sorted(glob.glob(os.path.join(test_dir, "*.jpeg")) + glob.glob(os.path.join(test_dir, "*.jpg")))
     if not test_files:
@@ -718,7 +723,7 @@ def run_full_mode(
 
                 for v_name, f_v, f_h in views:
                     flipped_tensor = apply_flip_transform(base_t, flip_v=f_v, flip_h=f_h).to(device)
-                    with get_autocast_context(device):
+                    with get_stage1_autocast_context(device, precision=stage1_precision):
                         output = model([flipped_tensor])[0]
 
                     scores = output["scores"]
@@ -839,6 +844,8 @@ def main():
                         help="Run validate_submission.py on the generated CSV(s)")
     parser.add_argument("--stage1-cache-dir", type=str, default=None,
                         help="Optional per-stem checkpoint directory for resumable Stage-1 inference")
+    parser.add_argument("--stage1-precision", type=str, choices=["bf16", "fp32"], default="bf16",
+                        help="Stage-1 Mask R-CNN inference precision: 'bf16' (default, reproduces Kaggle test_cache) or 'fp32' (strict float32)")
     args = parser.parse_args()
 
     rule_upper = args.rule.upper()
@@ -879,6 +886,7 @@ def main():
             strict_weights_only=args.strict_weights,
             verify_fp16=args.strict_weights,
             stage1_cache_dir=args.stage1_cache_dir,
+            stage1_precision=args.stage1_precision,
         )
         name_map = {
             "A": "submission_A_uniform_30models.csv",
@@ -910,6 +918,8 @@ def main():
                 use_cache=(args.mode == "fast"),
                 strict_weights_only=args.strict_weights,
                 verify_fp16=args.strict_weights,
+                stage1_precision=args.stage1_precision,
+                stage1_cache_dir=args.stage1_cache_dir,
             )
         elif args.mode == "fast":
             df_sub, stats = run_fast_mode(
@@ -930,6 +940,7 @@ def main():
                 limit=args.limit,
                 config_path=config_path,
                 strict_weights_only=args.strict_weights,
+                stage1_precision=args.stage1_precision,
             )
         df_sub.to_csv(out_path, index=False)
         generated.append((rule_upper, out_path, df_sub, stats))
@@ -941,23 +952,28 @@ def main():
     for r_tag, out_p, df_sub, stats in generated:
         print(f"\n[Saved Submission {r_tag}] {out_p} ({len(df_sub)} rows, {stats['total_filaments']} filaments)")
         if args.validate:
-            cmd = [sys.executable, val_script, "--sub", out_p]
-            if args.limit:
-                cmd.extend(["--expected_count", str(int(args.limit))])
-            elif val_test_dir and os.path.isdir(val_test_dir):
-                cmd.extend(["--test_dir", val_test_dir])
-                dir_imgs = [
-                    p for p in glob.glob(os.path.join(val_test_dir, "*.*"))
-                    if p.lower().endswith((".jpeg", ".jpg", ".png"))
-                ]
-                if dir_imgs:
-                    cmd.extend(["--expected_count", str(len(dir_imgs))])
-            print(f"[Validation Hook {r_tag}] Running: {' '.join(cmd)}")
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            print(res.stdout)
-            if res.returncode != 0:
-                print("STDERR:\n", res.stderr)
-                raise RuntimeError(f"Validation failed for {out_p}")
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmp_val_dir:
+                cmd = [sys.executable, val_script, "--sub", out_p]
+                if args.limit:
+                    sub_stems = sorted(df_sub["filament_id"].astype(str).str.split("_").str[0].unique().tolist())
+                    for s_val in sub_stems:
+                        Path(tmp_val_dir, f"{s_val}.jpg").touch()
+                    cmd.extend(["--test_dir", tmp_val_dir, "--expected_count", str(len(sub_stems))])
+                elif val_test_dir and os.path.isdir(val_test_dir):
+                    cmd.extend(["--test_dir", val_test_dir])
+                    dir_imgs = [
+                        p for p in glob.glob(os.path.join(val_test_dir, "*.*"))
+                        if p.lower().endswith((".jpeg", ".jpg", ".png"))
+                    ]
+                    if dir_imgs:
+                        cmd.extend(["--expected_count", str(len(dir_imgs))])
+                print(f"[Validation Hook {r_tag}] Running: {' '.join(cmd)}")
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                print(res.stdout)
+                if res.returncode != 0:
+                    print("STDERR:\n", res.stderr)
+                    raise RuntimeError(f"Validation failed for {out_p}")
 
             n_imgs_eval = stats.get("num_images", len(df_sub["filament_id"].str.split("_").str[0].unique()))
             if n_imgs_eval == 180 and not args.limit:

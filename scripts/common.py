@@ -60,6 +60,23 @@ def get_autocast_context(
     return contextlib.nullcontext()
 
 
+def get_stage1_autocast_context(
+    device: Optional[Union[str, torch.device]] = None,
+    precision: str = "bf16",
+):
+    """Return Stage-1 Mask R-CNN inference autocast context ('bf16' or 'fp32').
+
+    ``precision='bf16'`` reproduces the original competition ``bfloat16`` autocast
+    Stage-1 test cache on CUDA; ``precision='fp32'`` enforces strict float32.
+    """
+    prec = str(precision).strip().lower()
+    if prec == "fp32":
+        return contextlib.nullcontext()
+    if prec == "bf16":
+        return get_autocast_context(device=device, use_amp=True)
+    raise ValueError(f"Unsupported stage1 precision {precision!r}; expected 'bf16' or 'fp32'.")
+
+
 def extract_state_dict(ckpt: object) -> Dict[str, torch.Tensor]:
     """Extract a model state_dict and cast FP16/BF16 floating weights to float32."""
     state_dict = (

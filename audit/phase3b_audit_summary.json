@@ -1,0 +1,454 @@
+{
+  "generated_at": "2026-11-15",
+  "elapsed_sec": 43.15,
+  "ranker_and_refiner_composition": {
+    "stage1_proposal_ensemble": "30 Mask R-CNN ResNet50-FPN v2 checkpoints (6 families x 5 folds x 4 TTA flips = 120 views/img in test, 24 views/img in OOF; WMF cluster_score >= 0.20 pool)",
+    "semantic_priors": [
+      "ResNet50SemanticUNet (5 folds, 1024x1024, 2 channels: union foreground, filament core)",
+      "ResNeXt101SemanticUNet (5 folds, 1280x1280, 3 channels: union foreground, filament core, boundary edge; sharded .part00/.part01 < 100 MB)"
+    ],
+    "roi_boundary_refiners": [
+      "ResidualCropRefinerUNet / CropV1 (5 folds, 160x160, bbox pad=12 px, 6 channels + 4-dim score vector, frPyObjects target)",
+      "WideContextRefinerUNetV2 / WideRefV2 (5 folds, 224x224, bbox pad=56 px, 11 channels including neighbor suppression + ResNet50 & ResNeXt101 priors + 4-dim score vector, ResSE + ASPP, frPyObjects target)"
+    ],
+    "mask_blending_mode": {
+      "mode": "wref_uv1_t50",
+      "inner_weights": {
+        "crop_refiner_v1": 0.45,
+        "wide_refiner_v2": 0.42,
+        "resnet50_unet": 0.13
+      },
+      "outer_weight_wide_refiner_v2": 1.0,
+      "tau_mask": 0.5,
+      "nms_iou": 0.03,
+      "min_retained_ratio": 0.5,
+      "min_area_px": 10
+    },
+    "lightgbm_ranker": {
+      "name": "LGB_S27_yhyb",
+      "target": "target_y_hyb",
+      "num_boosters": 25,
+      "folds": 5,
+      "seeds": [
+        2026,
+        2027,
+        2028,
+        2029,
+        2030
+      ],
+      "feature_set_name": "S27 (20 Stage-1 view/geometry/intensity features + 4 CropV1 refiner features + 3 ResNet50 semantic U-Net features)",
+      "feature_count": 27,
+      "feature_cols": [
+        "member_score_mean",
+        "hires_ratio",
+        "prob_mean",
+        "prob_p25",
+        "prob_core_frac",
+        "prob_border_ratio",
+        "log_area",
+        "bbox_fill",
+        "aspect_ratio",
+        "n_comp",
+        "largest_comp_frac",
+        "solidity",
+        "ring_contrast_mean",
+        "ring_zscore",
+        "ring_contrast_core",
+        "radial_pos",
+        "unoccluded_area_ratio",
+        "max_iou_higher_rank",
+        "rel_score_to_max",
+        "rank_in_image",
+        "cnn_iou_score",
+        "cnn_mask_iou55",
+        "cnn_area_ratio",
+        "unet_mean",
+        "unet_core",
+        "unet_iou55",
+        "unet_iou_cnn"
+      ],
+      "feature_groups": {
+        "S20_stage1_geometry_intensity_agreement": [
+          "member_score_mean",
+          "hires_ratio",
+          "prob_mean",
+          "prob_p25",
+          "prob_core_frac",
+          "prob_border_ratio",
+          "log_area",
+          "bbox_fill",
+          "aspect_ratio",
+          "n_comp",
+          "largest_comp_frac",
+          "solidity",
+          "ring_contrast_mean",
+          "ring_zscore",
+          "ring_contrast_core",
+          "radial_pos",
+          "unoccluded_area_ratio",
+          "max_iou_higher_rank",
+          "rel_score_to_max",
+          "rank_in_image"
+        ],
+        "CNN_FEATS_crop_refiner_v1": [
+          "cnn_iou_score",
+          "cnn_mask_iou55",
+          "cnn_area_ratio",
+          "unet_mean"
+        ],
+        "UNET_FEATS_resnet50_semantic": [
+          "unet_core",
+          "unet_iou55",
+          "unet_iou_cnn"
+        ]
+      },
+      "params": {
+        "max_depth": 3,
+        "num_leaves": 7,
+        "min_child_samples": 60,
+        "n_estimators": 200,
+        "learning_rate": 0.04,
+        "subsample": 0.8,
+        "subsample_freq": 1,
+        "colsample_bytree": 0.8,
+        "reg_lambda": 10.0,
+        "verbose": -1,
+        "n_jobs": 4
+      },
+      "nested_oof_fold_thresholds": {
+        "0": 0.255,
+        "1": 0.235,
+        "2": 0.255,
+        "3": 0.255,
+        "4": 0.255
+      },
+      "test_median_threshold": 0.255,
+      "mask_nms_iou": 0.03
+    }
+  },
+  "leakage_and_inference_isolation_audit": {
+    "cv_fold_grouping": "Strict observation-level 5-fold split (707 observations -> 142/142/141/141/141, balanced by 2-letter observatory code, 0 cross-fold shared observations)",
+    "out_of_fold_model_isolation": "Every OOF fold f in {0..4} is predicted exclusively by Stage-1 detectors, Semantic U-Nets, CropRefinerV1, WideRefinerV2, and LightGBM boosters trained on folds != f",
+    "nested_threshold_selection": "Per-fold cutoff tau is selected on the 4 training folds (f' != f) and applied once to held-out fold f",
+    "test_inference_isolation": "Inference operates strictly on a single 2048x2048 grayscale image array at a time; zero metadata (no timestamps, site IDs, or file headers) and zero cross-image statistics are used"
+  },
+  "rule_c_phase3b_local_oof_metrics": {
+    "eval_tag": "[nested]",
+    "pq": 0.46875442406917966,
+    "sq": 0.6856761476326305,
+    "rq": 0.6836382243827556,
+    "tp": 5344,
+    "fp": 2091,
+    "fn": 2855,
+    "k1_single_annotator_pq": 0.47196608523032346,
+    "k1_single_annotator_sq": 0.6934963511391349,
+    "k1_single_annotator_rq": 0.6805603006491288,
+    "multi_annotator_pq": 0.46683202484245834,
+    "multi_annotator_sq": 0.6810288190571663,
+    "multi_annotator_rq": 0.685480572597137,
+    "per_image_union_dice_mean": 0.6639,
+    "per_image_union_dice_median": 0.7002,
+    "k1_union_dice_mean": 0.6557,
+    "matched_tp_inst_iou_mean": 0.6857,
+    "matched_tp_inst_iou_median": 0.6911,
+    "gt_split_frac_iou015": 0.0132,
+    "pred_merge_frac_iou015": 0.016,
+    "adversarial_auc_s27": 0.6206
+  },
+  "phase2_local_oof_metrics": {
+    "eval_tag": "[nested]",
+    "pq": 0.46760036302826324,
+    "sq": 0.685728756815219,
+    "rq": 0.6819028054182449,
+    "tp": 5311,
+    "fp": 2067,
+    "fn": 2888,
+    "nested_fold_thresholds": {
+      "0": 0.255,
+      "1": 0.255,
+      "2": 0.255,
+      "3": 0.255,
+      "4": 0.255
+    }
+  },
+  "hybrid_a100_oof_metrics": {
+    "eval_tag": "[nested]",
+    "pq": 0.4691504213596485,
+    "sq": 0.6857622707434832,
+    "rq": 0.6841298236647074,
+    "tp": 5354,
+    "fp": 2099,
+    "fn": 2845
+  },
+  "paired_bootstraps_10k": {
+    "rule_c_nested_vs_rule_b_nested": {
+      "full_a": {
+        "pq": 0.45212963849747934,
+        "sq": 0.6776678070316035,
+        "rq": 0.667184767825918,
+        "tp": 5151,
+        "fp": 2091,
+        "fn": 3048
+      },
+      "full_b": {
+        "pq": 0.46875442406917966,
+        "sq": 0.6856761476326305,
+        "rq": 0.6836382243827556,
+        "tp": 5344,
+        "fp": 2091,
+        "fn": 2855
+      },
+      "point_delta": 0.01662478557170033,
+      "mean_delta": 0.016632287390024578,
+      "std_delta": 0.0016513358520101147,
+      "ci_lower": 0.013348043876311038,
+      "ci_upper": 0.019870955678775597,
+      "p_b_better": 1.0
+    },
+    "rule_c_nested_vs_rule_b_insample": {
+      "full_a": {
+        "pq": 0.4543274603841985,
+        "sq": 0.6772628818281827,
+        "rq": 0.6708288207937823,
+        "tp": 5265,
+        "fp": 2233,
+        "fn": 2934
+      },
+      "full_b": {
+        "pq": 0.46875442406917966,
+        "sq": 0.6856761476326305,
+        "rq": 0.6836382243827556,
+        "tp": 5344,
+        "fp": 2091,
+        "fn": 2855
+      },
+      "point_delta": 0.014426963684981142,
+      "mean_delta": 0.014437713977292516,
+      "std_delta": 0.0015603737804521004,
+      "ci_lower": 0.011383985693793432,
+      "ci_upper": 0.01745408403987224,
+      "p_b_better": 1.0
+    },
+    "rule_c_nested_vs_phase2_local": {
+      "full_a": {
+        "pq": 0.46760036302826324,
+        "sq": 0.685728756815219,
+        "rq": 0.6819028054182449,
+        "tp": 5311,
+        "fp": 2067,
+        "fn": 2888
+      },
+      "full_b": {
+        "pq": 0.46875442406917966,
+        "sq": 0.6856761476326305,
+        "rq": 0.6836382243827556,
+        "tp": 5344,
+        "fp": 2091,
+        "fn": 2855
+      },
+      "point_delta": 0.001154061040916421,
+      "mean_delta": 0.001159790450109853,
+      "std_delta": 0.0006459816879506997,
+      "ci_lower": -7.217011605840088e-05,
+      "ci_upper": 0.0024243299472162,
+      "p_b_better": 0.9677
+    }
+  },
+  "table1_bootstrap_cis_10k": {
+    "Single_1536_clahe_insample": {
+      "pq": 0.43376344136473155,
+      "sq": 0.6686769948150436,
+      "rq": 0.6486890452762035,
+      "tp": 5208,
+      "fp": 2650,
+      "fn": 2991,
+      "ci_lo": 0.4252,
+      "ci_hi": 0.4425,
+      "se": 0.0044
+    },
+    "Single_2048_BCE_nested": {
+      "pq": 0.4399851167993753,
+      "sq": 0.6731197584995438,
+      "rq": 0.6536505744240065,
+      "tp": 5206,
+      "fp": 2524,
+      "fn": 2993,
+      "ci_lo": 0.43175408133975146,
+      "ci_hi": 0.44861393535855476,
+      "se": 0.00431164950131571
+    },
+    "Rule_A_Uniform_WMF_nested": {
+      "pq": 0.45079535265759607,
+      "sq": 0.6760643283718173,
+      "rq": 0.666793578272733,
+      "tp": 5254,
+      "fp": 2306,
+      "fn": 2945,
+      "ci_lo": 0.4422304981985777,
+      "ci_hi": 0.4596232473497226,
+      "se": 0.004500120076532226
+    },
+    "Rule_B_Weighted_WMF_nested": {
+      "pq": 0.45212963849747945,
+      "sq": 0.6776678070316036,
+      "rq": 0.667184767825918,
+      "tp": 5151,
+      "fp": 2091,
+      "fn": 3048,
+      "ci_lo": 0.4432138466213284,
+      "ci_hi": 0.4613183535906954,
+      "se": 0.004639694424598794
+    },
+    "Rule_B_Fixed_Global_insample": {
+      "pq": 0.454327,
+      "sq": 0.6773,
+      "rq": 0.6708,
+      "tp": 5265,
+      "fp": 2233,
+      "fn": 2934,
+      "ci_lo": 0.4451,
+      "ci_hi": 0.4634,
+      "se": 0.0046
+    },
+    "Phase2_Local_CropV1_LGB_nested": {
+      "pq": 0.46760036302826324,
+      "sq": 0.685728756815219,
+      "rq": 0.6819028054182449,
+      "tp": 5311,
+      "fp": 2067,
+      "fn": 2888,
+      "ci_lo": 0.4586,
+      "ci_hi": 0.4766,
+      "se": 0.0046
+    },
+    "Phase3B_Local_Rule_C_nested": {
+      "pq": 0.46875442406917966,
+      "sq": 0.6856761476326305,
+      "rq": 0.6836382243827556,
+      "tp": 5344,
+      "fp": 2091,
+      "fn": 2855,
+      "ci_lo": 0.4597,
+      "ci_hi": 0.4777,
+      "se": 0.0046
+    },
+    "Hybrid_A100_ConvNeXt_V1_S27_nested": {
+      "pq": 0.4691504213596485,
+      "sq": 0.6857622707434832,
+      "rq": 0.6841298236647074,
+      "tp": 5354,
+      "fp": 2099,
+      "fn": 2845,
+      "ci_lo": 0.4601,
+      "ci_hi": 0.4781,
+      "se": 0.0046
+    }
+  },
+  "table1_provenance": {
+    "row1_Single_1536_clahe": "audit/oof_single_family_comparison.json -> ['1536_clahe'] & audit/phase3b_audit_summary.json -> ['table1_bootstrap_cis_10k']['Single_1536_clahe_insample']",
+    "row2_Single_2048_BCE": "audit/oof_4family_2048_evaluation.json -> ['oof_2048_single_family']['nested_cv'] & audit/phase3b_audit_summary.json -> ['table1_bootstrap_cis_10k']['Single_2048_BCE_nested']",
+    "row3_6Fam_Rule_A_nested": "audit/priority_2_results.json -> ['res_6fam_thresh'] & audit/phase3b_audit_summary.json -> ['table1_bootstrap_cis_10k']['Rule_A_Uniform_WMF_nested']",
+    "row4_6Fam_Rule_B_nested": "audit/priority_2_results.json -> ['m1_nested_metrics'] / ['boot_m1_vs_m0']['full_b'] & audit/phase3b_audit_summary.json -> ['table1_bootstrap_cis_10k']['Rule_B_Weighted_WMF_nested']",
+    "row5_6Fam_Rule_B_insample": "audit/final_release_analyses.json -> ['oof_707_rule_B']['pooled_metrics'] & audit/phase3b_audit_summary.json -> ['table1_bootstrap_cis_10k']['Rule_B_Fixed_Global_insample']",
+    "row6_Phase2_Local_nested": "audit/phase3b_audit_summary.json -> ['phase2_local_oof_metrics'] & ['table1_bootstrap_cis_10k']['Phase2_Local_CropV1_LGB_nested']",
+    "row7_Phase3B_Local_Rule_C_nested": "audit/phase3b_audit_summary.json -> ['rule_c_phase3b_local_oof_metrics'] & ['table1_bootstrap_cis_10k']['Phase3B_Local_Rule_C_nested'] (also configs/phase3b_refiner.json -> ['validation_metrics'])",
+    "row8_Hybrid_A100_nested": "audit/phase3b_audit_summary.json -> ['hybrid_a100_oof_metrics'] & ['table1_bootstrap_cis_10k']['Hybrid_A100_ConvNeXt_V1_S27_nested']"
+  },
+  "table2_provenance": {
+    "row1_Per_Image_PQ_Rule_B": "audit/final_release_analyses.json -> ['oof_707_rule_B']['distributions']['per_image_pq']",
+    "row2_Per_Image_Union_Dice_Rule_B_and_C": "audit/final_release_analyses.json -> ['oof_707_rule_B']['distributions']['per_image_union_dice'] & audit/phase3b_audit_summary.json -> ['rule_c_phase3b_local_oof_metrics']",
+    "row3_Per_Image_Union_IoU_Rule_B": "audit/final_release_analyses.json -> ['oof_707_rule_B']['distributions']['per_image_union_iou']",
+    "row4_Matched_TP_Inst_IoU_Rule_B_and_C": "audit/final_release_analyses.json -> ['oof_707_rule_B']['distributions']['matched_tp_instance_iou'] & audit/phase3b_audit_summary.json -> ['rule_c_phase3b_local_oof_metrics']",
+    "row5_GT_Split_Pred_Merge_Rule_C": "audit/phase3b_audit_summary.json -> ['rule_c_phase3b_local_oof_metrics'] & audit/final_release_analyses.json -> ['oof_707_rule_B']['matching_analysis']['iou_gt_050']['gt_multi_hit_count']",
+    "row6_Pred_multi_hit_Rule_B": "audit/final_release_analyses.json -> ['oof_707_rule_B']['matching_analysis']['iou_gt_050'] & ['iou_gt_000']"
+  },
+  "bf16_180_regeneration_parity": {
+    "A": {
+      "label": "Rule A (Uniform 30)",
+      "file": "submission_A_uniform_30models.csv",
+      "ref_rows": 1168,
+      "new_rows": 1170,
+      "ref_filaments": 1165,
+      "new_filaments": 1167,
+      "filament_ratio_pct": 100.17,
+      "ref_empty_stems": 3,
+      "new_empty_stems": 3,
+      "identical_stems": 3,
+      "sha256_ref": "91d891e3f8df526c74c298189e547d48b262182d73630d23d1c09e62858c408d",
+      "sha256_new": "464084c65d48d8950f5868b1bad7efa2e9032ae112688be99a470ab491df339d",
+      "sha256_kaggle_dl": "91d891e3f8df526c74c298189e547d48b262182d73630d23d1c09e62858c408d",
+      "sha_match_new_vs_ref": false,
+      "sha_match_ref_vs_dl": true,
+      "union_iou_mean": 0.977852,
+      "union_iou_median": 0.995361,
+      "union_iou_min": 0.490426,
+      "union_iou_p05": 0.87809,
+      "hungarian_inst_iou_mean": 0.992002,
+      "hungarian_inst_iou_median": 0.996352,
+      "cross_pq": 0.981793,
+      "cross_sq": 0.993725,
+      "cross_rq": 0.987993,
+      "cross_tp": 1152,
+      "cross_fp": 15,
+      "cross_fn": 13
+    },
+    "B": {
+      "label": "Rule B (Weighted 30)",
+      "file": "submission_B_weighted_30models.csv",
+      "ref_rows": 1158,
+      "new_rows": 1157,
+      "ref_filaments": 1155,
+      "new_filaments": 1154,
+      "filament_ratio_pct": 99.91,
+      "ref_empty_stems": 3,
+      "new_empty_stems": 3,
+      "identical_stems": 3,
+      "sha256_ref": "bf07084b7d088b8e6e9babf6c277a739d4de2d6d59232b269938f7c3a7b6a494",
+      "sha256_new": "49f34140bdce406f9cae3b695af3f5bd424542ed2d5db492a17b90659742d9d2",
+      "sha256_kaggle_dl": "bf07084b7d088b8e6e9babf6c277a739d4de2d6d59232b269938f7c3a7b6a494",
+      "sha_match_new_vs_ref": false,
+      "sha_match_ref_vs_dl": true,
+      "union_iou_mean": 0.987718,
+      "union_iou_median": 0.995978,
+      "union_iou_min": 0.476252,
+      "union_iou_p05": 0.951129,
+      "hungarian_inst_iou_mean": 0.993825,
+      "hungarian_inst_iou_median": 0.996337,
+      "cross_pq": 0.989091,
+      "cross_sq": 0.993825,
+      "cross_rq": 0.995236,
+      "cross_tp": 1149,
+      "cross_fp": 5,
+      "cross_fn": 6
+    },
+    "C": {
+      "label": "Rule C (Phase 3B Local)",
+      "file": "submission_phase3b_local.csv",
+      "ref_rows": 1173,
+      "new_rows": 1175,
+      "ref_filaments": 1170,
+      "new_filaments": 1172,
+      "filament_ratio_pct": 100.17,
+      "ref_empty_stems": 3,
+      "new_empty_stems": 3,
+      "identical_stems": 3,
+      "sha256_ref": "e9df8bc442dd8de0ba077eeb9c78d6365a9fa114697068a45b8e1eb9258b1fee",
+      "sha256_new": "eb37761154521473519fd2a101e85f3746051f4bdc196f5222953c233854932d",
+      "sha256_kaggle_dl": "e9df8bc442dd8de0ba077eeb9c78d6365a9fa114697068a45b8e1eb9258b1fee",
+      "sha_match_new_vs_ref": false,
+      "sha_match_ref_vs_dl": true,
+      "union_iou_mean": 0.98747,
+      "union_iou_median": 0.995825,
+      "union_iou_min": 0.548139,
+      "union_iou_p05": 0.972724,
+      "hungarian_inst_iou_mean": 0.992078,
+      "hungarian_inst_iou_median": 0.996563,
+      "cross_pq": 0.987266,
+      "cross_sq": 0.994057,
+      "cross_rq": 0.993168,
+      "cross_tp": 1163,
+      "cross_fp": 9,
+      "cross_fn": 7
+    }
+  }
+}

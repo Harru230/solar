@@ -195,20 +195,23 @@ All models required to reproduce **Submissions A, B, and C (Phase 3B Local)** li
 ### 7.1 Measured Storage & Parity Metrics
 * **Checkpoint Size Reduction**: Each pruned Stage-1 checkpoint shrinks from **175.40 MB** (`float32`) to **92.03 MB** (`87.76 MiB`, `float16`, **50.03%** of FP32 size, `-83.2%` vs 523.9 MB raw training checkpoint), strictly under 100 MB per file.
 * **Self-Contained Total**: **81 files** totaling **`4,105,994,780` bytes (`4,105.99 MB` / `3.824 GiB`)**, verified by `weights/checksums.sha256`.
-* **Mandatory FP32 Upcast & Compute**: `scripts/common.py:extract_state_dict()` upcasts `float16` weight tensors to `float32` on load, and `get_autocast_context()` defaults to `nullcontext()` (strict FP32 compute) because `bfloat16` autocast loses `-0.003314 PQ`.
+* **FP16 Upcast, Stage-1 `bfloat16` Default & Optional Strict `float32`**: `scripts/common.py:extract_state_dict()` upcasts `float16` weight tensors to `float32` on load. To reproduce the submitted Kaggle competition CSVs (`test_cache` was originally generated under CUDA `bfloat16` autocast), Stage-1 inference defaults to `--stage1-precision bf16` (`get_stage1_autocast_context(precision="bf16")`), while Phase 3B Stage 2/3 run in strict `float32` (`get_autocast_context()` defaults to `nullcontext()`). Strict Stage-1 `--stage1-precision fp32` remains available as an option (`+0.003314` Fold-0 PQ gain vs `bf16`).
 * **Measured Fold-0 Single-Model Verification (`r50_1536_clahe_f0.pt`, 142 Fold-0 images, 4-flip TTA + WMF at $\tau_s = 0.75, \tau_m = 0.50$)**:
-  - **Strict FP32 inference (`no autocast`)**: FP32 weights **PQ = 0.437514** (`SQ=0.666565, RQ=0.656371, TP=1275, FP=708, FN=627`) vs FP16 weights **PQ = 0.438118** (`SQ=0.666626, RQ=0.657216, TP=1275, FP=703, FN=627`), $\Delta PQ = +0.000604$.
-  - **`bfloat16` autocast inference**: FP32 weights **PQ = 0.436265** (`SQ=0.664289, RQ=0.656739, TP=1279, FP=714, FN=623`) vs FP16 weights **PQ = 0.432951** (`SQ=0.664573, RQ=0.651472, TP=1272, FP=731, FN=630`), $\Delta PQ = -0.003314$.
+  - **Strict FP32 inference (`--stage1-precision fp32`, no autocast)**: FP32 weights **PQ = 0.437514** (`SQ=0.666565, RQ=0.656371, TP=1275, FP=708, FN=627`) vs FP16 weights **PQ = 0.438118** (`SQ=0.666626, RQ=0.657216, TP=1275, FP=703, FN=627`), $\Delta PQ = +0.000604$.
+  - **`bfloat16` autocast inference (`--stage1-precision bf16`, default)**: FP32 weights **PQ = 0.436265** (`SQ=0.664289, RQ=0.656739, TP=1279, FP=714, FN=623`) vs FP16 weights **PQ = 0.432951** (`SQ=0.664573, RQ=0.651472, TP=1272, FP=731, FN=630`), $\Delta PQ = -0.003314$.
 
 ### 7.2 Verifying Checksums & Running Strictly Offline Inference
 ```bash
 # Verify all 81 in-repo SHA-256 checksums in weights/
 (cd weights && sha256sum -c checksums.sha256)
 
-# Regenerate A, B, and C jointly on GPU strictly from weights/
+# Regenerate A, B, and C jointly on GPU strictly from weights/ (default --stage1-precision bf16 matches Kaggle caching)
 python scripts/regenerate_submission.py --rule ALL --mode full \
-    --strict-weights --weights-dir weights \
+    --strict-weights --stage1-precision bf16 --weights-dir weights \
     --test-dir <TEST_IMAGES_DIR> --output work/reproduced_csvs --validate
+
+# Optional strict float32 Stage-1 pass (+0.0033 Fold-0 PQ vs bf16):
+# python scripts/regenerate_submission.py --rule ALL --mode full --strict-weights --stage1-precision fp32 ...
 
 # Run single-model smoke inference directly from weights/
 python scripts/run_pipeline.py --mode single \

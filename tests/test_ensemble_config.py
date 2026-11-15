@@ -256,3 +256,24 @@ def test_fold_split_disjoint_no_leakage():
             sub_df = pd.read_csv(csv_p)
             test_obs = {fid.rsplit("_", 1)[0] for fid in sub_df["filament_id"].astype(str)}
             assert len(train_obs & test_obs) == 0
+
+
+def test_stage1_autocast_precision_contexts(monkeypatch):
+    """Verify Stage-1 precision dispatcher returns bf16 autocast on CUDA by default and nullcontext for fp32/CPU."""
+    import contextlib
+    import torch
+    from scripts.common import get_autocast_context, get_stage1_autocast_context
+
+    assert isinstance(get_autocast_context(device="cuda", use_amp=False), contextlib.nullcontext)
+    assert isinstance(get_stage1_autocast_context(device="cpu", precision="bf16"), contextlib.nullcontext)
+    assert isinstance(get_stage1_autocast_context(device="cuda", precision="fp32"), contextlib.nullcontext)
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
+    ctx_bf16 = get_stage1_autocast_context(device="cuda", precision="bf16")
+    assert isinstance(ctx_bf16, torch.amp.autocast)
+    assert ctx_bf16.fast_dtype == torch.bfloat16
+    assert isinstance(get_stage1_autocast_context(device="cuda", precision="fp32"), contextlib.nullcontext)
+
+    with pytest.raises(ValueError, match="Unsupported stage1 precision"):
+        get_stage1_autocast_context(device="cuda", precision="int8")
