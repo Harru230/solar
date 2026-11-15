@@ -188,7 +188,7 @@ Stored directly in-repo under `weights/phase3/` (**51 files**, `1,345.24 MB`, al
 
 ## 7. In-Repo FP16 Weights Summary (`weights/`, < 100 MB Per File)
 
-All models required to reproduce **Submissions A, B, and C (Phase 3B Local)** live directly inside `weights/` under the strict GitHub **100 MB** (`< 100,000,000` bytes) per-file limit:
+All models required to reproduce the **Selected final submission (`submission_phase3b_local.csv`, Rule C, Public LB `0.41`)** and the Kaggle-submitted Stage-1 baselines (**Rule B**, Public LB `0.40`, and **Rule A**, Public LB `0.39`) live directly inside `weights/` under the strict GitHub **100 MB** (`< 100,000,000` bytes) per-file limit:
 - **30 Stage-1 Mask R-CNN checkpoints** (`r50_*_f{0..4}.pt` in `float16`): **`~92.03 MB`** (`87.76 MiB`) each, **`2,760.75 MB`** total.
 - **51 Phase 3B files under `weights/phase3/`** (`1,345.24 MB` total): `5` `semantic_unet_f{0..4}_fp16.pt` (`65.25 MB` ea), `10` deterministic shards `resnext101_unet_f{0..4}_fp16.pt.part0{0,1}` (`96.06 MB` ea, reconstructed in memory on load), `5` `crop_refiner_f{0..4}_fp16.pt` (`3.97 MB` ea), `5` `wide_refiner_v2_f{0..4}_fp16.pt` (`6.91 MB` ea), `25` `lgb_s27_yhyb_*.txt` boosters, and `lgb_metadata.json`.
 
