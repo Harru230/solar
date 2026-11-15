@@ -119,7 +119,7 @@ python scripts/regenerate_submission.py --rule ALL --mode full \
 ├── sample_images/                   # 3 representative 2048x2048 H-alpha test/demo observations
 ├── scripts/                         # Training, inference, Phase 3B refinement, WMF fusion, validation
 ├── audit/                           # OOF/metric sensitivity, morphology, error & matching JSONs/scripts
-├── report/                          # 4-page Overleaf acmart LaTeX source package (main.tex, preamble.tex, main.bib, figures/) + prior main.pdf snapshot
+├── report/                          # 4-page Overleaf acmart LaTeX source package (main.tex, preamble.tex, main.bib, figures/) + compiled main.pdf
 ├── figures/                         # Generated analysis plots referenced in REPORT.md
 ├── tests/                           # 52 unit/integration tests (`pytest -q`)
 ├── docs/weights.md                  # Full 30-model + Phase 3B manifest & SHA-256 hashes
