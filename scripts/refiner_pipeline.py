@@ -20,14 +20,16 @@ from __future__ import annotations
 
 import argparse
 import gc
+import io
 import json
 import math
 import os
+import pickle
 import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import cv2
 import lightgbm as lgb
@@ -379,38 +381,129 @@ class WideContextRefinerUNetV2(nn.Module):
 
 # ────────────────────────── CHECKPOINT RESOLUTION ───────────────────────────
 
-def resolve_phase3_asset(rel_or_name: str, weights_dir: Optional[Path] = None) -> Path:
-    """Locate a Phase 3 checkpoint or booster across repo/work/upstream directories."""
+def _asset_candidate_paths(
+    rel_or_name: str,
+    weights_dir: Optional[Path] = None,
+    strict_weights_only: bool = False,
+) -> List[Path]:
+    """Return ordered search locations for a Phase 3 asset."""
     name = Path(rel_or_name).name
-    upstream_dir = Path(os.environ.get("SOLAR_UPSTREAM_DIR", str(REPO_ROOT.parent / "solar")))
-    candidates = []
+    candidates: List[Path] = []
     if weights_dir is not None:
         w = Path(weights_dir)
         candidates.extend([w / rel_or_name, w / "phase3" / name, w / name])
+    if strict_weights_only:
+        if weights_dir is None:
+            candidates.extend([
+                REPO_ROOT / "weights" / rel_or_name,
+                REPO_ROOT / "weights" / "phase3" / name,
+                REPO_ROOT / "weights" / name,
+            ])
+        return candidates
+
+    upstream_dir = Path(os.environ.get("SOLAR_UPSTREAM_DIR", str(REPO_ROOT.parent / "solar")))
     candidates.extend([
-        REPO_ROOT / "work" / "checkpoints" / name,
         REPO_ROOT / "weights" / rel_or_name,
         REPO_ROOT / "weights" / "phase3" / name,
         REPO_ROOT / "weights" / name,
+        REPO_ROOT / "work" / "checkpoints" / name,
         upstream_dir / "work" / "checkpoints" / name,
         upstream_dir / "work" / "s20_gpu" / "release_pkg" / name,
         upstream_dir / "work" / "s20_gpu" / name,
     ])
+    return candidates
+
+
+def resolve_phase3_asset_paths(
+    rel_or_name: str,
+    weights_dir: Optional[Path] = None,
+    strict_weights_only: bool = False,
+) -> List[Path]:
+    """Locate a single Phase 3 asset or its ordered lossless ``.partNN`` binary shards."""
+    candidates = _asset_candidate_paths(rel_or_name, weights_dir=weights_dir, strict_weights_only=strict_weights_only)
     for cand in candidates:
         if cand.is_file():
-            return cand
+            return [cand]
+        if cand.parent.is_dir():
+            shards = sorted(cand.parent.glob(f"{cand.name}.part*"))
+            if shards and all(s.is_file() for s in shards):
+                return shards
     raise FileNotFoundError(
-        f"Missing Phase 3 asset '{rel_or_name}'. Checked: {[str(c) for c in candidates[:6]]}. "
-        "Run 'bash scripts/download_weights.sh --all' if full semantic U-Net checkpoints are missing."
+        f"Missing Phase 3 asset '{rel_or_name}' (strict={strict_weights_only}). "
+        f"Checked: {[str(c) for c in candidates[:6]]}."
     )
+
+
+def resolve_phase3_asset(
+    rel_or_name: str,
+    weights_dir: Optional[Path] = None,
+    strict_weights_only: bool = False,
+) -> Path:
+    """Locate a single-file Phase 3 asset (booster, metadata, or unsharded checkpoint)."""
+    paths = resolve_phase3_asset_paths(rel_or_name, weights_dir=weights_dir, strict_weights_only=strict_weights_only)
+    if len(paths) != 1 or ".part" in paths[0].name:
+        raise FileNotFoundError(
+            f"Asset '{rel_or_name}' is sharded across {len(paths)} parts; use load_phase3_state_dict()."
+        )
+    return paths[0]
+
+
+def _assert_fp16_state_dict(ckpt: Any, label: str) -> None:
+    """Assert raw checkpoint tensors contain float16 floating-point weights prior to FP32 upcast."""
+    raw_sd = ckpt["model_state_dict"] if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
+    float_dtypes = {
+        v.dtype for v in raw_sd.values()
+        if isinstance(v, torch.Tensor) and v.is_floating_point()
+    }
+    if torch.float16 not in float_dtypes:
+        raise ValueError(f"Expected float16 tensors in '{label}', got dtypes: {sorted(map(str, float_dtypes))}")
+
+
+def load_phase3_state_dict(
+    rel_or_name: str,
+    weights_dir: Optional[Path] = None,
+    map_location: Union[str, torch.device] = "cpu",
+    strict_weights_only: bool = False,
+    verify_fp16: bool = False,
+    loaded_log: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Load a Phase 3 state dict from a single `.pt` or concatenated `.partNN` shards."""
+    paths = resolve_phase3_asset_paths(rel_or_name, weights_dir=weights_dir, strict_weights_only=strict_weights_only)
+    if strict_weights_only and weights_dir is not None:
+        root = Path(weights_dir).resolve()
+        for p in paths:
+            if not p.resolve().is_relative_to(root):
+                raise RuntimeError(f"Strict weights violation: {p} is outside {root}")
+
+    if len(paths) == 1:
+        ckpt = torch.load(paths[0], map_location=map_location, weights_only=False)
+    else:
+        buf = io.BytesIO()
+        for shard in paths:
+            buf.write(shard.read_bytes())
+        buf.seek(0)
+        ckpt = torch.load(buf, map_location=map_location, weights_only=False)
+
+    if verify_fp16:
+        _assert_fp16_state_dict(ckpt, rel_or_name)
+    sd = extract_state_dict(ckpt)
+    if loaded_log is not None:
+        loaded_log.extend(str(p.resolve()) for p in paths)
+    return sd
 
 
 def load_lgb_boosters(
     weights_dir: Optional[Path] = None,
     meta_filename: str = "lgb_metadata.json",
+    strict_weights_only: bool = False,
+    loaded_log: Optional[List[str]] = None,
 ) -> Tuple[List[lgb.Booster], List[str]]:
     """Load all 25 cross-fitted LightGBM boosters (`5 seeds x 5 folds`) and feature names."""
-    meta_path = resolve_phase3_asset(f"phase3/{meta_filename}", weights_dir=weights_dir)
+    meta_path = resolve_phase3_asset(
+        f"phase3/{meta_filename}", weights_dir=weights_dir, strict_weights_only=strict_weights_only
+    )
+    if loaded_log is not None:
+        loaded_log.append(str(meta_path.resolve()))
     with open(meta_path, "r") as f:
         meta = json.load(f)
     features = list(meta["features"])
@@ -419,7 +512,11 @@ def load_lgb_boosters(
     for seed in seeds:
         for fold in range(5):
             b_name = f"lgb_s27_yhyb_s{seed}_f{fold}.txt"
-            b_path = resolve_phase3_asset(f"phase3/{b_name}", weights_dir=weights_dir)
+            b_path = resolve_phase3_asset(
+                f"phase3/{b_name}", weights_dir=weights_dir, strict_weights_only=strict_weights_only
+            )
+            if loaded_log is not None:
+                loaded_log.append(str(b_path.resolve()))
             boosters.append(lgb.Booster(model_file=str(b_path)))
     return boosters, features
 
@@ -1100,196 +1197,316 @@ def materialize_disjoint_rows_phase3b(
 
 # ────────────────────────── END-TO-END ORCHESTRATION ────────────────────────
 
+def resolve_stage1_checkpoint_path(
+    model_spec: dict,
+    weights_dir: Path,
+    strict_weights_only: bool = False,
+) -> Path:
+    """Resolve a Stage-1 Mask R-CNN checkpoint from repo weights or fallbacks."""
+    subdir = model_spec["id"]
+    pruned_name = model_spec.get("pruned_name", f"{subdir}.pt")
+    run_relpath = model_spec.get("checkpoint_relpath", f"work/runs/{subdir}.pt")
+    cand_paths = [weights_dir / pruned_name, weights_dir / f"{subdir}.pt"]
+    if not strict_weights_only:
+        upstream_root = os.environ.get("SOLAR_UPSTREAM_DIR", str(REPO_ROOT.parent / "solar"))
+        cand_paths.extend([
+            REPO_ROOT / "weights" / pruned_name,
+            REPO_ROOT / "work" / "checkpoints" / pruned_name,
+            REPO_ROOT / run_relpath,
+            Path(upstream_root) / "work" / "checkpoints" / pruned_name,
+            Path(upstream_root) / run_relpath,
+        ])
+    ckpt_path = next((p for p in cand_paths if p.is_file()), None)
+    if ckpt_path is None:
+        raise FileNotFoundError(
+            f"Could not locate checkpoint for {subdir} (strict={strict_weights_only}). "
+            f"Checked: {[str(x) for x in cand_paths[:5]]}"
+        )
+    if strict_weights_only and not ckpt_path.resolve().is_relative_to(weights_dir.resolve()):
+        raise RuntimeError(f"Strict weights violation: {ckpt_path} is outside {weights_dir}")
+    return ckpt_path
+
+
+def _load_stage1_model(
+    model_spec: dict,
+    weights_dir: Path,
+    device: torch.device,
+    strict_weights_only: bool = False,
+    verify_fp16: bool = False,
+    loaded_log: Optional[List[str]] = None,
+) -> Tuple[torch.nn.Module, Path]:
+    """Load one Stage-1 Mask R-CNN checkpoint into strict FP32 eval mode."""
+    sz = int(model_spec["img_size"])
+    is_a5 = bool(model_spec.get("anchors5", False))
+    ckpt_path = resolve_stage1_checkpoint_path(
+        model_spec, weights_dir=weights_dir, strict_weights_only=strict_weights_only
+    )
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    if verify_fp16:
+        _assert_fp16_state_dict(ckpt, ckpt_path.name)
+    state_dict = extract_state_dict(ckpt)
+    model = get_maskrcnn_model(pretrained=False, min_size=sz, max_size=sz, num_classes=2, anchors5=is_a5)
+    model.load_state_dict(state_dict)
+    model.float().to(device).eval()
+    if loaded_log is not None:
+        loaded_log.append(str(ckpt_path.resolve()))
+    del ckpt, state_dict
+    return model, ckpt_path
+
+
+def _build_4tta_views(base_t: torch.Tensor, device: torch.device) -> List[Tuple[Tuple[str, bool, bool], torch.Tensor]]:
+    """Precompute the 4 H/V flip views of a single-image tensor on ``device``."""
+    base_dev = base_t.to(device)
+    out: List[Tuple[Tuple[str, bool, bool], torch.Tensor]] = []
+    for vname, f_v, f_h in (("id", False, False), ("h", False, True), ("v", True, False), ("hv", True, True)):
+        t_in = base_dev
+        if f_v:
+            t_in = torch.flip(t_in, dims=[1])
+        if f_h:
+            t_in = torch.flip(t_in, dims=[2])
+        out.append(((vname, f_v, f_h), t_in))
+    return out
+
+
+def _infer_stage1_4tta_single(
+    model: torch.nn.Module,
+    base_t: Optional[torch.Tensor],
+    sz: int,
+    fam: str,
+    device: torch.device,
+    gpu_views: Optional[List[Tuple[Tuple[str, bool, bool], torch.Tensor]]] = None,
+) -> List[dict]:
+    """Run 4-flip TTA Mask R-CNN inference on a single image tensor (no batch/neighbor mixing)."""
+    views = gpu_views if gpu_views is not None else _build_4tta_views(base_t, device)
+    scale_to_2048 = 2048.0 / float(sz)
+    out_cands: List[dict] = []
+    for (_, f_v, f_h), t_in in views:
+        with get_autocast_context(device):
+            out = model([t_in])[0]
+        scores = out["scores"]
+        keep = scores >= 0.25
+        if not keep.any():
+            continue
+        scores_np = scores[keep].detach().cpu().numpy()
+        boxes = out["boxes"][keep].clone()
+        masks = out["masks"][keep]
+        if f_v:
+            boxes[:, [1, 3]] = float(sz) - boxes[:, [3, 1]]
+            masks = torch.flip(masks, dims=[-2])
+        if f_h:
+            boxes[:, [0, 2]] = float(sz) - boxes[:, [2, 0]]
+            masks = torch.flip(masks, dims=[-1])
+        boxes_2048 = (boxes * scale_to_2048).detach().cpu().numpy()
+        masks_sq = masks.squeeze(1)
+
+        valid: List[Tuple[int, int, int, int, int]] = []
+        for k in range(len(scores_np)):
+            b = boxes_2048[k]
+            x1 = max(0, int(np.floor(b[0])))
+            y1 = max(0, int(np.floor(b[1])))
+            x2 = min(FRAME_SIZE, int(np.ceil(b[2])) + 1)
+            y2 = min(FRAME_SIZE, int(np.ceil(b[3])) + 1)
+            if x2 > x1 and y2 > y1:
+                valid.append((k, x1, y1, x2, y2))
+        if not valid:
+            continue
+
+        # Upsample per-batch chunks (<=16 masks = <=256 MB) on GPU and coalesce
+        # all ROI crops into a single FP16 device-to-host transfer per view.
+        if sz == FRAME_SIZE:
+            m_half = masks_sq.half()
+            crops = [m_half[k, y1:y2, x1:x2] for k, x1, y1, x2, y2 in valid]
+        else:
+            crops = []
+            for start in range(0, len(valid), 16):
+                batch_valid = valid[start : start + 16]
+                k_idxs = [v[0] for v in batch_valid]
+                m_full = F.interpolate(
+                    masks_sq[k_idxs].unsqueeze(1).float(),
+                    size=(FRAME_SIZE, FRAME_SIZE),
+                    mode="bilinear",
+                    align_corners=False,
+                )[:, 0].half()
+                for ii, (_, x1, y1, x2, y2) in enumerate(batch_valid):
+                    crops.append(m_full[ii, y1:y2, x1:x2])
+
+        crop_sizes = [c.numel() for c in crops]
+        crop_shapes = [(c.shape[0], c.shape[1]) for c in crops]
+        flat_cpu = torch.cat([c.reshape(-1) for c in crops]).detach().cpu().numpy()
+        off = 0
+        for (k, x1, y1, x2, y2), sz_c, sh_c in zip(valid, crop_sizes, crop_shapes):
+            out_cands.append({
+                "box": np.array([x1, y1, x2, y2], dtype=np.int32),
+                "score": float(scores_np[k]),
+                "prob_crop": flat_cpu[off : off + sz_c].reshape(sh_c).copy(),
+                "family": fam,
+            })
+            off += sz_c
+    return out_cands
+
+
 def _collect_stage1_candidates_from_weights(
     stems: Sequence[str],
     img_by_stem: Dict[str, np.ndarray],
     cfg: dict,
     weights_dir: Path,
     device: torch.device,
+    strict_weights_only: bool = False,
+    verify_fp16: bool = False,
+    loaded_log: Optional[List[str]] = None,
+    stage1_cache_dir: Optional[Union[str, Path]] = None,
 ) -> Dict[str, List[dict]]:
-    """Run all 30 Mask R-CNN checkpoints (4-flip TTA, strict FP32) sequentially across images."""
+    """Run all 30 Mask R-CNN checkpoints (4-flip TTA, strict FP32) with bounded host RAM."""
     models = cfg["models"]
-    views = [("id", False, False), ("h", False, True), ("v", True, False), ("hv", True, True)]
     raw_by_stem: Dict[str, List[dict]] = {s: [] for s in stems}
-    upstream_root = os.environ.get("SOLAR_UPSTREAM_DIR", str(REPO_ROOT.parent / "solar"))
-
-    prepped_by_stem: Dict[str, Dict[int, torch.Tensor]] = {}
     needed_sizes = sorted({int(m["img_size"]) for m in models})
-    for stem in stems:
-        raw_img = img_by_stem[stem]
-        prepped_by_stem[stem] = {
-            sz: torch.from_numpy(preprocess_solar_image(raw_img, sz)).float()
-            for sz in needed_sizes
-        }
 
-    with torch.no_grad():
-        for m_idx, m in enumerate(models, start=1):
-            subdir = m["id"]
-            pruned_name = m.get("pruned_name", f"{subdir}.pt")
-            run_relpath = m.get("checkpoint_relpath", f"work/runs/{subdir}.pt")
-            fam = m["family"]
-            sz = int(m["img_size"])
-            is_a5 = bool(m.get("anchors5", False))
+    s1_cache_path = Path(stage1_cache_dir) if stage1_cache_dir else None
+    if s1_cache_path is not None:
+        s1_cache_path.mkdir(parents=True, exist_ok=True)
+        pending_stems = [s for s in stems if not (s1_cache_path / f"{s}.pkl").is_file()]
+        if len(pending_stems) < len(stems):
+            print(
+                f"  [Stage 1 Cache] Found {len(stems) - len(pending_stems)}/{len(stems)} cached stems; "
+                f"{len(pending_stems)} remaining.",
+                flush=True,
+            )
+    else:
+        pending_stems = list(stems)
 
-            cand_paths = [
-                weights_dir / pruned_name,
-                weights_dir / f"{subdir}.pt",
-                REPO_ROOT / "weights" / pruned_name,
-                REPO_ROOT / "work" / "checkpoints" / pruned_name,
-                REPO_ROOT / run_relpath,
-                Path(upstream_root) / "work" / "checkpoints" / pruned_name,
-                Path(upstream_root) / run_relpath,
-            ]
-            ckpt_path = next((p for p in cand_paths if p.is_file()), None)
-            if ckpt_path is None:
-                raise FileNotFoundError(f"Could not locate checkpoint for {subdir}. Checked: {[str(x) for x in cand_paths[:5]]}")
+    can_preload_all = (
+        device.type == "cuda"
+        and torch.cuda.get_device_properties(device).total_memory >= 12 * (1024 ** 3)
+    )
 
-            ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-            state_dict = extract_state_dict(ckpt)
-            model = get_maskrcnn_model(pretrained=False, min_size=sz, max_size=sz, num_classes=2, anchors5=is_a5)
-            model.load_state_dict(state_dict)
-            model.float().to(device).eval()
-            scale_to_2048 = 2048.0 / float(sz)
+    if pending_stems:
+        with torch.inference_mode():
+            if can_preload_all:
+                loaded = []
+                for m_idx, m in enumerate(models, start=1):
+                    model, ckpt_p = _load_stage1_model(
+                        m, weights_dir=weights_dir, device=device,
+                        strict_weights_only=strict_weights_only,
+                        verify_fp16=verify_fp16, loaded_log=loaded_log,
+                    )
+                    loaded.append((m["id"], m["family"], int(m["img_size"]), model))
+                    if m_idx % 10 == 0 or m_idx == len(models):
+                        print(f"  [Stage 1 Load] {m_idx:02d}/{len(models)} models ready (last={ckpt_p.name})", flush=True)
 
-            for stem in stems:
-                base_t = prepped_by_stem[stem][sz]
-                for _, f_v, f_h in views:
-                    dx = 2 if f_h else None
-                    dy = 1 if f_v else None
-                    t_in = base_t
-                    if dy is not None:
-                        t_in = torch.flip(t_in, dims=[dy])
-                    if dx is not None:
-                        t_in = torch.flip(t_in, dims=[dx])
-                    t_in = t_in.to(device)
-                    with get_autocast_context(device):
-                        out = model([t_in])[0]
-                    scores = out["scores"]
-                    keep = scores >= 0.25
-                    if not keep.any():
-                        continue
-                    scores_np = scores[keep].detach().cpu().numpy()
-                    boxes = out["boxes"][keep].clone()
-                    masks = out["masks"][keep].clone()
-                    if f_v:
-                        boxes[:, [1, 3]] = float(sz) - boxes[:, [3, 1]]
-                        masks = torch.flip(masks, dims=[-2])
-                    if f_h:
-                        boxes[:, [0, 2]] = float(sz) - boxes[:, [2, 0]]
-                        masks = torch.flip(masks, dims=[-1])
-                    boxes_2048 = (boxes * scale_to_2048).detach().cpu().numpy()
-                    if sz == FRAME_SIZE:
-                        masks_up = masks.squeeze(1).detach().cpu().numpy()
+                t_s1 = time.time()
+                for img_idx, stem in enumerate(pending_stems, start=1):
+                    raw_img = img_by_stem[stem]
+                    views_by_sz = {
+                        sz: _build_4tta_views(torch.from_numpy(preprocess_solar_image(raw_img, sz)).float(), device)
+                        for sz in needed_sizes
+                    }
+                    stem_cands: List[dict] = []
+                    for _, fam, sz, model in loaded:
+                        stem_cands.extend(
+                            _infer_stage1_4tta_single(model, None, sz=sz, fam=fam, device=device, gpu_views=views_by_sz[sz])
+                        )
+                    del views_by_sz
+                    if s1_cache_path is not None:
+                        tmp_p = s1_cache_path / f"{stem}.pkl.tmp"
+                        with open(tmp_p, "wb") as f:
+                            pickle.dump(stem_cands, f, protocol=pickle.HIGHEST_PROTOCOL)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        os.replace(tmp_p, s1_cache_path / f"{stem}.pkl")
+                        del stem_cands
                     else:
-                        masks_up = F.interpolate(
-                            masks.float(), size=(FRAME_SIZE, FRAME_SIZE), mode="bilinear", align_corners=False
-                        ).squeeze(1).detach().cpu().numpy()
-                    for k in range(len(scores_np)):
-                        b = boxes_2048[k]
-                        x1 = max(0, int(np.floor(b[0])))
-                        y1 = max(0, int(np.floor(b[1])))
-                        x2 = min(FRAME_SIZE, int(np.ceil(b[2])) + 1)
-                        y2 = min(FRAME_SIZE, int(np.ceil(b[3])) + 1)
-                        if x2 <= x1 or y2 <= y1:
-                            continue
-                        raw_by_stem[stem].append({
-                            "box": np.array([x1, y1, x2, y2], dtype=np.int32),
-                            "score": float(scores_np[k]),
-                            "prob_crop": masks_up[k, y1:y2, x1:x2].astype(np.float16),
-                            "family": fam,
-                        })
+                        raw_by_stem[stem] = stem_cands
+                    if img_idx % 10 == 0 or img_idx == len(pending_stems):
+                        print(f"  [Stage 1 Infer] [{img_idx:03d}/{len(pending_stems):03d}] images ({time.time() - t_s1:.1f}s)", flush=True)
 
-            print(f"  [Stage 1] {m_idx:02d}/{len(models)} {subdir} ({fam}, {sz}px) done.", flush=True)
-            del model, ckpt, state_dict
-            gc.collect()
-            if device.type == "cuda":
+                del loaded
+                gc.collect()
                 torch.cuda.empty_cache()
+            else:
+                # Low-RAM / CPU fallback: group by input size in chunks of 30 stems
+                chunk_sz = 30
+                models_by_sz: Dict[int, List[dict]] = defaultdict(list)
+                for m in models:
+                    models_by_sz[int(m["img_size"])].append(m)
+                for sz in needed_sizes:
+                    sz_models = models_by_sz[sz]
+                    for c_start in range(0, len(pending_stems), chunk_sz):
+                        chunk_stems = pending_stems[c_start : c_start + chunk_sz]
+                        prepped = {
+                            s: torch.from_numpy(preprocess_solar_image(img_by_stem[s], sz)).float()
+                            for s in chunk_stems
+                        }
+                        for m in sz_models:
+                            log_target = loaded_log if c_start == 0 else None
+                            model, _ = _load_stage1_model(
+                                m, weights_dir=weights_dir, device=device,
+                                strict_weights_only=strict_weights_only,
+                                verify_fp16=verify_fp16, loaded_log=log_target,
+                            )
+                            for s in chunk_stems:
+                                raw_by_stem[s].extend(
+                                    _infer_stage1_4tta_single(model, prepped[s], sz=sz, fam=m["family"], device=device)
+                                )
+                            del model
+                            gc.collect()
+                            if device.type == "cuda":
+                                torch.cuda.empty_cache()
+                        del prepped
+                        gc.collect()
+                    print(f"  [Stage 1 Chunked] {sz}px ({len(sz_models)} models) complete.", flush=True)
+                if s1_cache_path is not None:
+                    for s in pending_stems:
+                        tmp_p = s1_cache_path / f"{s}.pkl.tmp"
+                        with open(tmp_p, "wb") as f:
+                            pickle.dump(raw_by_stem[s], f, protocol=pickle.HIGHEST_PROTOCOL)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        os.replace(tmp_p, s1_cache_path / f"{s}.pkl")
+                        raw_by_stem[s] = []
+
+    if s1_cache_path is not None:
+        for s in stems:
+            with open(s1_cache_path / f"{s}.pkl", "rb") as f:
+                raw_by_stem[s] = pickle.load(f)
 
     return raw_by_stem
 
 
-def run_phase3b_pipeline(
-    test_dir: str,
-    weights_dir: Optional[str] = None,
-    cache_dir: Optional[str] = None,
-    config_path: Optional[str] = None,
-    device_str: str = "auto",
-    limit: Optional[int] = None,
-    use_cache: bool = False,
+def run_phase3b_from_stage1(
+    stems: Sequence[str],
+    img_by_stem: Dict[str, np.ndarray],
+    raw_by_stem: Dict[str, List[dict]],
+    cfg: dict,
+    w_dir: Path,
+    device: torch.device,
     tau: float = 0.255,
+    strict_weights_only: bool = False,
+    verify_fp16: bool = False,
+    loaded_log: Optional[List[str]] = None,
+    t_start: Optional[float] = None,
+    free_raw_after_pool: bool = False,
 ) -> Tuple[pd.DataFrame, Dict]:
-    """Execute full Phase 3B Local pipeline (Stage 1 -> Semantic UNets -> V1/V2 Refiners -> LGB -> RLE)."""
-    if device_str == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(device_str)
+    """Execute Phase 3B Stage 2+ (WMF pool -> UNets -> Refiners -> LGB -> RLE) from Stage-1 candidates."""
+    t0 = t_start if t_start is not None else time.time()
 
-    def _res(p_str: Optional[str], default_rel: str) -> Path:
-        raw = Path(p_str) if p_str else (REPO_ROOT / default_rel)
-        return raw if (raw.is_absolute() or raw.exists()) else (REPO_ROOT / raw)
-
-    base_cfg_p = _res(config_path, "configs/final_ensemble.json")
-    if base_cfg_p.name == "phase3b_refiner.json":
-        with open(base_cfg_p, "r") as f:
-            p3_cfg = json.load(f)
-        tau = float(p3_cfg["ranker"]["tau_score"])
-        base_rel = p3_cfg.get("base_ensemble_config", "configs/final_ensemble.json")
-        base_cfg_p = REPO_ROOT / base_rel
-
-    with open(base_cfg_p, "r") as f:
-        cfg = json.load(f)
-
-    w_dir = _res(weights_dir, "work/checkpoints")
-    t_dir = Path(test_dir) if (Path(test_dir).is_absolute() or Path(test_dir).exists()) else (REPO_ROOT / test_dir)
-    image_paths = sorted(
-        list(t_dir.glob("*.jpeg")) + list(t_dir.glob("*.jpg")) + list(t_dir.glob("*.png"))
-    )
-    if not image_paths:
-        raise FileNotFoundError(f"No test images found in {test_dir}")
-    if limit is not None and limit > 0:
-        image_paths = image_paths[:limit]
-
-    stems = [p.stem for p in image_paths]
-    print(f"[Phase 3B Local] Device={device} (strict float32) | Images={len(stems)} | use_cache={use_cache}", flush=True)
-    t0 = time.time()
-
-    img_by_stem: Dict[str, np.ndarray] = {}
-    for p in image_paths:
-        g = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
-        if g is None:
-            raise IOError(f"Could not read image: {p}")
-        img_by_stem[p.stem] = g
-
-    # 1. Stage-1 30-model candidates -> Rule-B fusion -> S20 pool
+    # 1. Rule-B fusion -> S20 pool
     fam_models_count: Dict[str, int] = defaultdict(int)
     for m in cfg["models"]:
         fam_models_count[m["family"]] += 1
-
-    if use_cache:
-        from scripts.regenerate_submission import load_test_candidates_for_stem
-        if cache_dir is None:
-            cand_cache = REPO_ROOT / "work" / "test_cache"
-            if not cand_cache.is_dir():
-                alt = REPO_ROOT.parent / "solar" / "work" / "test_cache"
-                cand_cache = alt if alt.is_dir() else cand_cache
-        else:
-            cand_cache = Path(cache_dir) if (Path(cache_dir).is_absolute() or Path(cache_dir).exists()) else (REPO_ROOT / cache_dir)
-        model_tuples = [(m["id"], m["family"], int(m["img_size"])) for m in cfg["models"]]
-        raw_by_stem = {stem: load_test_candidates_for_stem(stem, model_tuples, str(cand_cache)) for stem in stems}
-    else:
-        raw_by_stem = _collect_stage1_candidates_from_weights(stems, img_by_stem, cfg, w_dir, device)
 
     pool_by_stem: Dict[str, List[dict]] = {}
     rows_by_stem: Dict[str, List[dict]] = {}
     total_cands = 0
     for stem in stems:
-        fused = fuse_rule_b_with_members(raw_by_stem[stem], fam_models_count)
+        stem_raw = raw_by_stem.pop(stem) if free_raw_after_pool else raw_by_stem[stem]
+        fused = fuse_rule_b_with_members(stem_raw, fam_models_count)
         f_rows, p_cands = extract_s20_pool_features(stem, fused, img_by_stem[stem], min_cluster_score=0.20)
         rows_by_stem[stem] = f_rows
         pool_by_stem[stem] = p_cands
         total_cands += len(p_cands)
-    del raw_by_stem
-    gc.collect()
+    if free_raw_after_pool:
+        raw_by_stem.clear()
+        gc.collect()
     print(f"  [Pool Built] {total_cands} candidates across {len(stems)} stems ({time.time() - t0:.1f}s)", flush=True)
 
     # 2. 5-Fold ResNet50SemanticUNet (1024x1024, 2ch)
@@ -1297,13 +1514,16 @@ def run_phase3b_pipeline(
     r50_accum = np.zeros((n_imgs, 2, 1024, 1024), dtype=np.float32)
     x_1024 = [make_clahe_uint8(img_by_stem[s], 1024) for s in stems]
     for fold in range(5):
-        ckpt_p = resolve_phase3_asset(f"semantic_unet_f{fold}_fp16.pt", weights_dir=w_dir)
+        sd = load_phase3_state_dict(
+            f"semantic_unet_f{fold}_fp16.pt", weights_dir=w_dir, map_location=device,
+            strict_weights_only=strict_weights_only, verify_fp16=verify_fp16, loaded_log=loaded_log,
+        )
         model = ResNet50SemanticUNet(out_ch=2)
-        model.load_state_dict(extract_state_dict(torch.load(ckpt_p, map_location=device, weights_only=False)))
+        model.load_state_dict(sd)
         model.float().to(device).eval()
         for i in range(n_imgs):
             r50_accum[i] += predict_4tta_semantic(model, x_1024[i], device, out_ch=2) / 5.0
-        del model
+        del model, sd
         gc.collect()
         if device.type == "cuda":
             torch.cuda.empty_cache()
@@ -1311,17 +1531,20 @@ def run_phase3b_pipeline(
     del r50_accum, x_1024
     print(f"  [Semantic R50 UNet] 5 folds complete ({time.time() - t0:.1f}s)", flush=True)
 
-    # 3. 5-Fold ResNeXt101SemanticUNet (1280x1280, 3ch)
+    # 3. 5-Fold ResNeXt101SemanticUNet (1280x1280, 3ch, shard-aware)
     rnx_accum = np.zeros((n_imgs, 3, 1280, 1280), dtype=np.float32)
     x_1280 = [make_clahe_uint8(img_by_stem[s], 1280) for s in stems]
     for fold in range(5):
-        ckpt_p = resolve_phase3_asset(f"resnext101_unet_f{fold}_fp16.pt", weights_dir=w_dir)
+        sd = load_phase3_state_dict(
+            f"resnext101_unet_f{fold}_fp16.pt", weights_dir=w_dir, map_location=device,
+            strict_weights_only=strict_weights_only, verify_fp16=verify_fp16, loaded_log=loaded_log,
+        )
         model = ResNeXt101SemanticUNet(out_ch=3)
-        model.load_state_dict(extract_state_dict(torch.load(ckpt_p, map_location=device, weights_only=False)))
+        model.load_state_dict(sd)
         model.float().to(device).eval()
         for i in range(n_imgs):
             rnx_accum[i] += predict_4tta_semantic(model, x_1280[i], device, out_ch=3) / 5.0
-        del model
+        del model, sd
         gc.collect()
         if device.type == "cuda":
             torch.cuda.empty_cache()
@@ -1379,14 +1602,17 @@ def run_phase3b_pipeline(
         v1_m_acc = np.zeros((len(meta_pairs), CROP_SZ_V1, CROP_SZ_V1), dtype=np.float32)
         v1_i_acc = np.zeros(len(meta_pairs), dtype=np.float32)
         for fold in range(5):
-            ckpt_p = resolve_phase3_asset(f"phase3/crop_refiner_f{fold}_fp16.pt", weights_dir=w_dir)
+            sd = load_phase3_state_dict(
+                f"phase3/crop_refiner_f{fold}_fp16.pt", weights_dir=w_dir, map_location=device,
+                strict_weights_only=strict_weights_only, verify_fp16=verify_fp16, loaded_log=loaded_log,
+            )
             m1 = ResidualCropRefinerUNet(in_ch=6, base=32)
-            m1.load_state_dict(extract_state_dict(torch.load(ckpt_p, map_location=device, weights_only=False)))
+            m1.load_state_dict(sd)
             m1.float().to(device).eval()
             pm, pi = predict_4tta_crop_v1(m1, X_v1, S_v1, device)
             v1_m_acc += pm / 5.0
             v1_i_acc += pi / 5.0
-            del m1
+            del m1, sd
         del X_v1, S_v1
         gc.collect()
         if device.type == "cuda":
@@ -1395,13 +1621,16 @@ def run_phase3b_pipeline(
         # 6. WideContextRefinerUNetV2 5-fold ensemble
         v2_m_acc = np.zeros((len(meta_pairs), CROP_SZ_WIDE, CROP_SZ_WIDE), dtype=np.float32)
         for fold in range(5):
-            ckpt_p = resolve_phase3_asset(f"phase3/wide_refiner_v2_f{fold}_fp16.pt", weights_dir=w_dir)
+            sd = load_phase3_state_dict(
+                f"phase3/wide_refiner_v2_f{fold}_fp16.pt", weights_dir=w_dir, map_location=device,
+                strict_weights_only=strict_weights_only, verify_fp16=verify_fp16, loaded_log=loaded_log,
+            )
             m2 = WideContextRefinerUNetV2(in_ch=11, base=40)
-            m2.load_state_dict(extract_state_dict(torch.load(ckpt_p, map_location=device, weights_only=False)))
+            m2.load_state_dict(sd)
             m2.float().to(device).eval()
             pm2, _ = predict_4tta_wide_v2(m2, X_v2, S_v2, device)
             v2_m_acc += pm2 / 5.0
-            del m2
+            del m2, sd
         del X_v2, S_v2
         v2_u8 = np.clip(np.round(v2_m_acc * 255.0), 0, 255).astype(np.uint8)
         del v2_m_acc
@@ -1442,7 +1671,9 @@ def run_phase3b_pipeline(
             row["unet_iou_cnn"] = float((b_cnn & b_un).sum()) / float(max(1, int((b_cnn | b_un).sum())))
             feat_dicts.append(row)
 
-        boosters, feat_names = load_lgb_boosters(weights_dir=w_dir)
+        boosters, feat_names = load_lgb_boosters(
+            weights_dir=w_dir, strict_weights_only=strict_weights_only, loaded_log=loaded_log
+        )
         X_mat = pd.DataFrame(feat_dicts)[feat_names].values.astype(np.float32)
         scores_acc = np.zeros(len(X_mat), dtype=np.float64)
         for booster in boosters:
@@ -1455,12 +1686,104 @@ def run_phase3b_pipeline(
     return df_sub, stats
 
 
+def run_phase3b_pipeline(
+    test_dir: str,
+    weights_dir: Optional[str] = None,
+    cache_dir: Optional[str] = None,
+    config_path: Optional[str] = None,
+    device_str: str = "auto",
+    limit: Optional[int] = None,
+    use_cache: bool = False,
+    tau: float = 0.255,
+    strict_weights_only: bool = False,
+    verify_fp16: bool = False,
+    loaded_log: Optional[List[str]] = None,
+) -> Tuple[pd.DataFrame, Dict]:
+    """Execute full Phase 3B Local pipeline (Stage 1 -> Semantic UNets -> V1/V2 Refiners -> LGB -> RLE)."""
+    if device_str == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(device_str)
+
+    def _res(p_str: Optional[str], default_rel: str) -> Path:
+        raw = Path(p_str) if p_str else (REPO_ROOT / default_rel)
+        return raw if (raw.is_absolute() or raw.exists()) else (REPO_ROOT / raw)
+
+    base_cfg_p = _res(config_path, "configs/final_ensemble.json")
+    if base_cfg_p.name == "phase3b_refiner.json":
+        with open(base_cfg_p, "r") as f:
+            p3_cfg = json.load(f)
+        tau = float(p3_cfg["ranker"]["tau_score"])
+        base_rel = p3_cfg.get("base_ensemble_config", "configs/final_ensemble.json")
+        base_cfg_p = REPO_ROOT / base_rel
+
+    with open(base_cfg_p, "r") as f:
+        cfg = json.load(f)
+
+    w_dir = _res(weights_dir, "weights")
+    t_dir = Path(test_dir) if (Path(test_dir).is_absolute() or Path(test_dir).exists()) else (REPO_ROOT / test_dir)
+    image_paths = sorted(
+        list(t_dir.glob("*.jpeg")) + list(t_dir.glob("*.jpg")) + list(t_dir.glob("*.png"))
+    )
+    if not image_paths:
+        raise FileNotFoundError(f"No test images found in {test_dir}")
+    if limit is not None and limit > 0:
+        image_paths = image_paths[:limit]
+
+    stems = [p.stem for p in image_paths]
+    print(
+        f"[Phase 3B Local] Device={device} (strict float32) | Images={len(stems)} | "
+        f"use_cache={use_cache} | strict_weights={strict_weights_only}",
+        flush=True,
+    )
+    t0 = time.time()
+
+    img_by_stem: Dict[str, np.ndarray] = {}
+    for p in image_paths:
+        g = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+        if g is None:
+            raise IOError(f"Could not read image: {p}")
+        img_by_stem[p.stem] = g
+
+    if use_cache:
+        from scripts.regenerate_submission import load_test_candidates_for_stem
+        if cache_dir is None:
+            cand_cache = REPO_ROOT / "work" / "test_cache"
+            if not cand_cache.is_dir():
+                alt = REPO_ROOT.parent / "solar" / "work" / "test_cache"
+                cand_cache = alt if alt.is_dir() else cand_cache
+        else:
+            cand_cache = Path(cache_dir) if (Path(cache_dir).is_absolute() or Path(cache_dir).exists()) else (REPO_ROOT / cache_dir)
+        model_tuples = [(m["id"], m["family"], int(m["img_size"])) for m in cfg["models"]]
+        raw_by_stem = {stem: load_test_candidates_for_stem(stem, model_tuples, str(cand_cache)) for stem in stems}
+    else:
+        raw_by_stem = _collect_stage1_candidates_from_weights(
+            stems, img_by_stem, cfg, w_dir, device,
+            strict_weights_only=strict_weights_only, verify_fp16=verify_fp16, loaded_log=loaded_log,
+        )
+
+    return run_phase3b_from_stage1(
+        stems=stems,
+        img_by_stem=img_by_stem,
+        raw_by_stem=raw_by_stem,
+        cfg=cfg,
+        w_dir=w_dir,
+        device=device,
+        tau=tau,
+        strict_weights_only=strict_weights_only,
+        verify_fp16=verify_fp16,
+        loaded_log=loaded_log,
+        t_start=t0,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run Phase 3B Local Refiner + LightGBM Pipeline.")
     parser.add_argument("--test-dir", type=str, default=None, help="Directory of input images (default: test_images)")
-    parser.add_argument("--weights-dir", type=str, default="work/checkpoints", help="Directory with extracted weights")
+    parser.add_argument("--weights-dir", type=str, default="weights", help="Directory with release weights")
     parser.add_argument("--cache-dir", type=str, default=None, help="Directory with cached 30-model test detections")
     parser.add_argument("--use-cache", action="store_true", help="Reuse cached Mask R-CNN candidates instead of running 30 checkpoints")
+    parser.add_argument("--strict-weights", action="store_true", help="Require all checkpoints from --weights-dir (FP16) with zero fallback")
     parser.add_argument("--config", type=str, default="configs/phase3b_refiner.json", help="Phase 3B config path")
     parser.add_argument("--output", type=str, default="work/submission_C_phase3b_local.csv", help="Output submission CSV")
     parser.add_argument("--device", type=str, default="auto", help="'auto', 'cuda', or 'cpu'")
@@ -1482,6 +1805,8 @@ def main():
         limit=args.limit,
         use_cache=args.use_cache,
         tau=args.tau,
+        strict_weights_only=args.strict_weights,
+        verify_fp16=args.strict_weights,
     )
     df_sub.to_csv(out_path, index=False)
     print(f"[Saved] {out_path} ({stats['total_rows']} rows, {stats['total_filaments']} filaments in {stats['elapsed_s']}s)")

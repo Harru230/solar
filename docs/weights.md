@@ -4,16 +4,28 @@ This document details how model weights are structured, pruned, hosted, and veri
 
 ---
 
-## 1. Why External Hosting (No Git LFS Bloat)
+## 1. Self-Contained In-Repo Weights (< 100 MB Per File)
 
-Full deep learning model checkpoints contain not only model weights, but also optimizer states (AdamW momentum and variance buffers) and learning rate scheduler states.
-* Raw unpruned training checkpoints total **~16.5 GB** (~550 MB per checkpoint across 30 Mask R-CNN models), plus Phase 3 semantic U-Nets and ROI refiners.
-* Checking multi-gigabyte binary weights into Git or Git LFS causes clone slowdowns, bandwidth bottlenecks, and quota failures.
-* By pruning AdamW optimizer buffers (which are strictly unnecessary for inference), each Mask R-CNN checkpoint reduces to **~175.4 MB** (a **68% reduction**).
-* To adhere to release file size limits (strictly under the 2 GB per-asset GitHub Releases threshold), weights are partitioned into **7 release archives**: 6 Mask R-CNN family archives (~814 MB compressed each) plus `weights_family_refiner.tar.gz` (**1,183 MB**, Phase 3B semantic U-Nets, boundary refiners, and 25 LightGBM boosters).
+Full unpruned training checkpoints contain AdamW optimizer momentum/variance buffers totaling **~16.5 GB** (~550 MB per Mask R-CNN checkpoint across 30 detectors, plus Phase 3B UNets and refiners). To satisfy competition self-containment (**every weight needed to reproduce Rules A, B, and C stored directly in the repository without external files**) AND GitHub's strict **100 MB per-file push limit** without Git LFS:
 
-Model weights are hosted externally on **GitHub Releases** under the authoritative repository:
-👉 **[Harru230/solar](https://github.com/Harru230/solar)**
+* Stripping optimizer buffers reduces each Mask R-CNN detector from `~550 MB` to `175.40 MB` (`float32`), and exporting in **`float16`** halves it to **`~92.03 MB`** (`87.76 MiB`).
+* Stripping & converting `ResNet50SemanticUNet` to `float16` yields **`65.25 MB`** per fold (`326.26 MB` total across 5 folds).
+* Converting `ResNeXt101SemanticUNet` (`183.2 MiB` FP16) into deterministic `<= 96.1 MB` chunks (`resnext101_unet_f{0..4}_fp16.pt.part00`, `.part01`, max chunk `96,064,456` bytes = `91.61 MiB`) keeps **all 81 files under 100 MB** (`< 100,000,000` bytes).
+* `weights/` in-repo total: **81 verified files**, **`4,105,994,780` bytes (`4,105.99 MB` / `3.824 GiB`)**:
+  - `weights/r50_*_f{0..4}.pt` (30 Stage-1 FP16 checkpoints): `2,760.75 MB`
+  - `weights/phase3/semantic_unet_f{0..4}_fp16.pt` (5 files): `326.26 MB`
+  - `weights/phase3/resnext101_unet_f{0..4}_fp16.pt.part0{0,1}` (10 shard files): `960.64 MB`
+  - `weights/phase3/crop_refiner_f{0..4}_fp16.pt` (5 files): `19.87 MB`
+  - `weights/phase3/wide_refiner_v2_f{0..4}_fp16.pt` (5 files): `34.53 MB`
+  - `weights/phase3/lgb_s27_yhyb_s{2026..2030}_f{0..4}.txt` + `lgb_metadata.json` (26 files): `3.94 MB`
+
+Verify all 81 committed weights offline:
+```bash
+(cd weights && sha256sum -c checksums.sha256)
+```
+
+### External GitHub Releases Backup (Optional FP32 Archives)
+Optional **FP32** backup archives (**7 tarballs**, under 2 GB each) remain mirrored on GitHub Releases (`Harru230/solar`, tag `v1.0.0`):
 
 ---
 
@@ -147,21 +159,20 @@ The authoritative 30 models comprising the ensemble:
 | `r50_1792_clahe_f4.pt` | 4 | 1792x1792 | 3 | BCE | `c0712263ac8c08d773a0f244f1a753c87871ee280010186c880fdf7c65dc462f` | 175.4 MB |
 
 ### Family 7: Phase 3B Semantic U-Nets, Refiners & LightGBM Ranker (`weights_family_refiner.tar.gz`)
-Also stored in-repo under `weights/phase3/` (`56 MB`, 36 files all `< 7 MB`: `crop_refiner_f{0..4}_fp16.pt`, `wide_refiner_v2_f{0..4}_fp16.pt`, 25 `lgb_s27_yhyb_*.txt` boosters, `lgb_metadata.json`). Full-disk semantic U-Nets are bundled in `weights_family_refiner.tar.gz`:
+Stored directly in-repo under `weights/phase3/` (**51 files**, `1,345.24 MB`, all `< 96.1 MB` per file) and also bundled unsharded in the GitHub Release backup archive `weights_family_refiner.tar.gz`:
 
 | Model / Bundle | Fold | Resolution / Role | Format | SHA-256 Checksum (or Reference) | Size |
 |---|:---:|---|---|---|---:|
-| `semantic_unet_f0_fp16.pt` | 0 | `1024x1024`, 2-ch (`fg, core`) | FP16 state dict | `c7633815a7b72bb5349837411b410b50318730e47624b3e5f1a589f0afd3bd4b` | 62.2 MB |
-| `semantic_unet_f1..4_fp16.pt` | 1–4 | `1024x1024`, 2-ch (`fg, core`) | FP16 state dict | See `Downloads/checksums.sha256` & `scripts/download_weights.sh` | 62.2 MB ea |
-| `resnext101_unet_f0_fp16.pt` | 0 | `1280x1280`, 3-ch (`fg, core, edge`) | FP16 state dict | `87b1dd8eaf667fe89c2de85ade03cf740bbdb480e8b1ec64db2458390a25ed1f` | 183.2 MB |
-| `resnext101_unet_f1..4_fp16.pt` | 1–4 | `1280x1280`, 3-ch (`fg, core, edge`) | FP16 state dict | See `Downloads/checksums.sha256` & `scripts/download_weights.sh` | 183.2 MB ea |
-| `phase3/crop_refiner_f{0..4}_fp16.pt` | 0–4 | `160x160`, 6-ch Local ROI Refiner | FP16 state dict | `fe1a75f6...10b88` (`f0`, in `weights/checksums.sha256`) | 3.8 MB ea |
-| `phase3/wide_refiner_v2_f{0..4}_fp16.pt` | 0–4 | `224x224`, 11-ch Wide Refiner V2 | FP16 state dict | `f753a39a...e9132` (`f0`, in `weights/checksums.sha256`) | 6.6 MB ea |
-| `phase3/lgb_s27_yhyb_s{2026..2030}_f{0..4}.txt` | 0–4 | 25 LightGBM boosters (`S27`, `lgb_metadata.json`) | Text + JSON | Verified in `weights/checksums.sha256` (42 total entries) | 0.15 MB ea |
+| `semantic_unet_f0_fp16.pt` | 0 | `1024x1024`, 2-ch (`fg, core`) | FP16 state dict | `c7633815a7b72bb5349837411b410b50318730e47624b3e5f1a589f0afd3bd4b` | 65.25 MB |
+| `semantic_unet_f1..4_fp16.pt` | 1–4 | `1024x1024`, 2-ch (`fg, core`) | FP16 state dict | Verified in `weights/checksums.sha256` (lines 43–46) | 65.25 MB ea |
+| `resnext101_unet_f{0..4}_fp16.pt.part0{0,1}` | 0–4 | `1280x1280`, 3-ch (`fg, core, edge`) | 10 FP16 binary shards | Verified in `weights/checksums.sha256` (lines 32–41) | 96.06 MB ea |
+| `phase3/crop_refiner_f{0..4}_fp16.pt` | 0–4 | `160x160`, 6-ch Local ROI Refiner | FP16 state dict | `fe1a75f695450bbbdbbd15f34c505fc316133f5d17276fd895c314ca88810b88` (`f0`) | 3.97 MB ea |
+| `phase3/wide_refiner_v2_f{0..4}_fp16.pt` | 0–4 | `224x224`, 11-ch Wide Refiner V2 | FP16 state dict | `f753a39aa588cc90dd8d23514d901f1b014c676614f66c4a1fff0886e7ee9132` (`f0`) | 6.91 MB ea |
+| `phase3/lgb_s27_yhyb_s{2026..2030}_f{0..4}.txt` + `lgb_metadata.json` | 0–4 | 25 LightGBM boosters (`S27`) + JSON | Text + JSON | Verified in `weights/checksums.sha256` (lines 6–31) | 3.94 MB total |
 
 ---
 
-## 6. Archive Checksums (`checksums.sha256`)
+## 6. Optional FP32 Backup Archive Checksums
 
 | Archive File | Size | SHA-256 Checksum |
 |---|:---:|---|
@@ -175,29 +186,29 @@ Also stored in-repo under `weights/phase3/` (`56 MB`, 36 files all `< 7 MB`: `cr
 
 ---
 
-## 7. Compact In-Repo Weights (`weights/`, < 100 MB Per File)
+## 7. In-Repo FP16 Weights Summary (`weights/`, < 100 MB Per File)
 
-To enable self-contained offline demos and smoke inference directly inside the repository under the 100 MB per-file GitHub size limit, `weights/` commits:
-- Six Fold-0 Mask R-CNN checkpoints in `float16` precision (`87.76 MB` each, **527 MB** total).
-- All 36 compact Phase 3B files under `weights/phase3/` (**56 MB** total: 5 `crop_refiner_f{0..4}_fp16.pt` at `3.8 MB`, 5 `wide_refiner_v2_f{0..4}_fp16.pt` at `6.6 MB`, 25 `lgb_s27_yhyb_*.txt` boosters, and `lgb_metadata.json`).
-
-Full 30-model FP32 checkpoints (5.26 GB) and full-disk semantic U-Nets (`semantic_unet_f{0..4}_fp16.pt`, `resnext101_unet_f{0..4}_fp16.pt`) are distributed via GitHub Release archives for exact reproduction of Submissions A, B, and C (`--rule C`).
+All models required to reproduce **Submissions A, B, and C (Phase 3B Local)** live directly inside `weights/` under the strict GitHub **100 MB** (`< 100,000,000` bytes) per-file limit:
+- **30 Stage-1 Mask R-CNN checkpoints** (`r50_*_f{0..4}.pt` in `float16`): **`~92.03 MB`** (`87.76 MiB`) each, **`2,760.75 MB`** total.
+- **51 Phase 3B files under `weights/phase3/`** (`1,345.24 MB` total): `5` `semantic_unet_f{0..4}_fp16.pt` (`65.25 MB` ea), `10` deterministic shards `resnext101_unet_f{0..4}_fp16.pt.part0{0,1}` (`96.06 MB` ea, reconstructed in memory on load), `5` `crop_refiner_f{0..4}_fp16.pt` (`3.97 MB` ea), `5` `wide_refiner_v2_f{0..4}_fp16.pt` (`6.91 MB` ea), `25` `lgb_s27_yhyb_*.txt` boosters, and `lgb_metadata.json`.
 
 ### 7.1 Measured Storage & Parity Metrics
-* **Checkpoint Size Reduction**: Each pruned checkpoint shrinks from **175.40 MB** (`float32`) to **87.76 MB** (`float16`, **50.03%** of FP32 size, `-83.2%` vs 523.9 MB raw training checkpoint), strictly under 100 MB per file.
-* **In-Repo Compact Set**: 6 Fold-0 Mask R-CNN checkpoints (**527 MB**) plus 36 Phase 3B files (**56 MB** under `weights/phase3/`), `42` entries total verified by `weights/checksums.sha256`.
+* **Checkpoint Size Reduction**: Each pruned Stage-1 checkpoint shrinks from **175.40 MB** (`float32`) to **92.03 MB** (`87.76 MiB`, `float16`, **50.03%** of FP32 size, `-83.2%` vs 523.9 MB raw training checkpoint), strictly under 100 MB per file.
+* **Self-Contained Total**: **81 files** totaling **`4,105,994,780` bytes (`4,105.99 MB` / `3.824 GiB`)**, verified by `weights/checksums.sha256`.
 * **Mandatory FP32 Upcast & Compute**: `scripts/common.py:extract_state_dict()` upcasts `float16` weight tensors to `float32` on load, and `get_autocast_context()` defaults to `nullcontext()` (strict FP32 compute) because `bfloat16` autocast loses `-0.003314 PQ`.
 * **Measured Fold-0 Single-Model Verification (`r50_1536_clahe_f0.pt`, 142 Fold-0 images, 4-flip TTA + WMF at $\tau_s = 0.75, \tau_m = 0.50$)**:
   - **Strict FP32 inference (`no autocast`)**: FP32 weights **PQ = 0.437514** (`SQ=0.666565, RQ=0.656371, TP=1275, FP=708, FN=627`) vs FP16 weights **PQ = 0.438118** (`SQ=0.666626, RQ=0.657216, TP=1275, FP=703, FN=627`), $\Delta PQ = +0.000604$.
   - **`bfloat16` autocast inference**: FP32 weights **PQ = 0.436265** (`SQ=0.664289, RQ=0.656739, TP=1279, FP=714, FN=623`) vs FP16 weights **PQ = 0.432951** (`SQ=0.664573, RQ=0.651472, TP=1272, FP=731, FN=630`), $\Delta PQ = -0.003314$.
 
-### 7.2 Verifying & Exporting FP16 Weights
+### 7.2 Verifying Checksums & Running Strictly Offline Inference
 ```bash
-# Verify all 42 in-repo SHA-256 checksums in weights/
+# Verify all 81 in-repo SHA-256 checksums in weights/
 (cd weights && sha256sum -c checksums.sha256)
 
-# Optional: export all 30 checkpoints in float16 locally (~18s total)
-python scripts/prune_checkpoints.py --fp16 --all-30 --output-dir weights_all_fp16
+# Regenerate A, B, and C jointly on GPU strictly from weights/
+python scripts/regenerate_submission.py --rule ALL --mode full \
+    --strict-weights --weights-dir weights \
+    --test-dir <TEST_IMAGES_DIR> --output work/reproduced_csvs --validate
 
 # Run single-model smoke inference directly from weights/
 python scripts/run_pipeline.py --mode single \

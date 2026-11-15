@@ -86,28 +86,26 @@ def load_ensemble_config(config_path: Optional[Union[str, Path]] = None) -> dict
 def check_ensemble_weights_available(
     config_path: Optional[Union[str, Path]] = None,
     weights_dir: Optional[Union[str, Path]] = None,
+    strict_weights_only: bool = False,
 ) -> Tuple[bool, List[str]]:
     """Checks whether all configured ensemble checkpoints exist."""
     cfg = load_ensemble_config(config_path)
-    if weights_dir is None:
-        weights_dir = REPO_ROOT / "work/checkpoints"
-    else:
-        weights_dir = Path(weights_dir)
+    weights_dir = Path(weights_dir) if weights_dir is not None else (REPO_ROOT / "weights")
 
     missing = []
     upstream_dir = os.environ.get("SOLAR_UPSTREAM_DIR", str(REPO_ROOT.parent / "solar"))
     for m in cfg.get("models", []):
         p_name = m.get("pruned_name", f"{m['id']}.pt")
         rel = m.get("checkpoint_relpath", "")
-        cands = [
-            weights_dir / p_name,
-            weights_dir / f"{m['id']}.pt",
-            REPO_ROOT / "weights" / p_name,
-            REPO_ROOT / "work/checkpoints" / p_name,
-            REPO_ROOT / rel,
-            Path(upstream_dir) / "work/checkpoints" / p_name,
-            Path(upstream_dir) / rel,
-        ]
+        cands = [weights_dir / p_name, weights_dir / f"{m['id']}.pt"]
+        if not strict_weights_only:
+            cands.extend([
+                REPO_ROOT / "weights" / p_name,
+                REPO_ROOT / "work/checkpoints" / p_name,
+                REPO_ROOT / rel,
+                Path(upstream_dir) / "work/checkpoints" / p_name,
+                Path(upstream_dir) / rel,
+            ])
         if not any(c.is_file() for c in cands):
             missing.append(p_name)
 
@@ -393,7 +391,8 @@ def fuse_test_candidates(
         for x in cl:
             w_norm = float(x["score"]) / score_sum
             b = x["box"]
-            fused_prob[b[1] - uy1 : b[3] - uy1, b[0] - ux1 : b[2] - ux1] += w_norm * x["prob_crop"]
+            crop_f32 = x["prob_crop"].astype(np.float32) if x["prob_crop"].dtype != np.float32 else x["prob_crop"]
+            fused_prob[b[1] - uy1 : b[3] - uy1, b[0] - ux1 : b[2] - ux1] += w_norm * crop_f32
 
         fused.append({
             "score": cluster_score,
@@ -513,6 +512,128 @@ def run_fast_mode(
 
 # ────────────────────────── FULL INFERENCE ENGINE ────────────────────────────
 
+def materialize_stage1_rule(
+    test_stems: List[str],
+    raw_by_stem: Dict[str, List[dict]],
+    cfg: dict,
+    rule_name: str,
+) -> Tuple[pd.DataFrame, dict]:
+    """Fuse precomputed Stage-1 30-model candidates into a disjoint RLE DataFrame for Rule A or B."""
+    models = cfg.get("models", [])
+    rule_key = "rule_A" if rule_name.upper() == "A" else "rule_B"
+    rule_cfg = cfg.get("decision_rules", {}).get(rule_key, {})
+
+    tau_score = float(rule_cfg.get("tau_score", 0.850 if rule_name.upper() == "A" else 0.750))
+    tau_mask = float(rule_cfg.get("tau_mask", 0.550))
+    gamma = float(rule_cfg.get("gamma", 1.0 if rule_name.upper() == "A" else 1.5))
+    family_weights = rule_cfg.get("family_weights", {m["family"]: 1.0 for m in models})
+    model_list_tuples = [(m["id"], m["family"], m["img_size"]) for m in models]
+
+    rows = []
+    total_filaments = 0
+    areas = []
+    t0 = time.time()
+    for stem in test_stems:
+        fused = fuse_test_candidates(raw_by_stem[stem], family_weights, gamma, model_list_tuples)
+        rles = apply_disjoint_canvas(fused, tau_score, tau_mask)
+        if not rles:
+            rows.append({"filament_id": f"{stem}_1", "segmentation_rle": EMPTY_RLE})
+        else:
+            for k, enc in enumerate(rles, start=1):
+                rows.append({"filament_id": f"{stem}_{k}", "segmentation_rle": enc})
+                total_filaments += 1
+                m_dec = mu.decode({"size": [FRAME_SIZE, FRAME_SIZE], "counts": enc.encode("ascii")})
+                areas.append(int(m_dec.sum()))
+
+    df = pd.DataFrame(rows)
+    mean_a = float(np.mean(areas)) if areas else 0.0
+    med_a = float(np.median(areas)) if areas else 0.0
+    stats = {
+        "rule": rule_name.upper(),
+        "num_images": len(test_stems),
+        "total_filaments": total_filaments,
+        "total_rows": len(df),
+        "mean_area": mean_a,
+        "median_area": med_a,
+        "elapsed_sec": time.time() - t0,
+    }
+    return df, stats
+
+
+def run_joint_full_mode(
+    weights_dir: str,
+    test_dir: str,
+    rules: Tuple[str, ...] = ("A", "B", "C"),
+    device_str: str = "auto",
+    limit: Optional[int] = None,
+    config_path: Optional[str] = None,
+    phase3_config_path: Optional[str] = None,
+    strict_weights_only: bool = True,
+    verify_fp16: bool = True,
+    stage1_cache_dir: Optional[str] = None,
+) -> Tuple[Dict[str, Tuple[pd.DataFrame, dict]], List[str]]:
+    """Run Stage-1 30 FP16 Mask R-CNN models once on GPU/CPU and materialize requested rules."""
+    from scripts.refiner_pipeline import _collect_stage1_candidates_from_weights, run_phase3b_from_stage1
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu") if device_str == "auto" else torch.device(device_str)
+    cfg = load_ensemble_config(config_path)
+    p3_cfg_p = Path(phase3_config_path) if phase3_config_path else (REPO_ROOT / "configs/phase3b_refiner.json")
+    with open(p3_cfg_p, "r") as f:
+        p3_cfg = json.load(f)
+    tau_c = float(p3_cfg["ranker"]["tau_score"])
+
+    test_files = sorted(glob.glob(os.path.join(test_dir, "*.jpeg")) + glob.glob(os.path.join(test_dir, "*.jpg")))
+    if not test_files:
+        raise FileNotFoundError(f"No test images found in {test_dir}")
+    if limit is not None and limit > 0:
+        test_files = test_files[:limit]
+    stems = [Path(p).stem for p in test_files]
+
+    img_by_stem: Dict[str, np.ndarray] = {}
+    for p in test_files:
+        g = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
+        if g is None:
+            raise IOError(f"Could not read image: {p}")
+        img_by_stem[Path(p).stem] = g
+
+    t0 = time.time()
+    loaded_log: List[str] = []
+    w_path = Path(weights_dir)
+    raw_by_stem = _collect_stage1_candidates_from_weights(
+        stems, img_by_stem, cfg, w_path, device,
+        strict_weights_only=strict_weights_only, verify_fp16=verify_fp16,
+        loaded_log=loaded_log, stage1_cache_dir=stage1_cache_dir,
+    )
+    stage1_elapsed = time.time() - t0
+
+    outputs: Dict[str, Tuple[pd.DataFrame, dict]] = {}
+    rules_upper = [r.upper() for r in rules]
+    for r in ("A", "B"):
+        if r in rules_upper:
+            df_r, st_r = materialize_stage1_rule(stems, raw_by_stem, cfg, r)
+            st_r["elapsed_sec"] = round(stage1_elapsed + st_r["elapsed_sec"], 2)
+            outputs[r] = (df_r, st_r)
+
+    if "C" in rules_upper:
+        df_c, st_c = run_phase3b_from_stage1(
+            stems=stems,
+            img_by_stem=img_by_stem,
+            raw_by_stem=raw_by_stem,
+            cfg=cfg,
+            w_dir=w_path,
+            device=device,
+            tau=tau_c,
+            strict_weights_only=strict_weights_only,
+            verify_fp16=verify_fp16,
+            loaded_log=loaded_log,
+            t_start=t0,
+            free_raw_after_pool=True,
+        )
+        outputs["C"] = (df_c, st_c)
+
+    return outputs, loaded_log
+
+
 def run_full_mode(
     weights_dir: str,
     test_dir: str,
@@ -520,6 +641,7 @@ def run_full_mode(
     device_str: str = "auto",
     limit: Optional[int] = None,
     config_path: Optional[str] = None,
+    strict_weights_only: bool = False,
 ) -> Tuple[pd.DataFrame, dict]:
     """Full neural network inference from model weights with CPU fallback."""
     if device_str == "auto":
@@ -527,7 +649,7 @@ def run_full_mode(
     else:
         device = torch.device(device_str)
 
-    print(f"[Full Mode] Running inference on device: {device}...")
+    print(f"[Full Mode] Running inference on device: {device} (strict_weights={strict_weights_only})...")
 
     test_files = sorted(glob.glob(os.path.join(test_dir, "*.jpeg")) + glob.glob(os.path.join(test_dir, "*.jpg")))
     if not test_files:
@@ -548,37 +670,24 @@ def run_full_mode(
     gamma = float(rule_cfg.get("gamma", 1.0 if rule_name.upper() == "A" else 1.5))
     family_weights = rule_cfg.get("family_weights", {m["family"]: 1.0 for m in models})
 
-    # Locate and load checkpoints
+    from scripts.refiner_pipeline import resolve_stage1_checkpoint_path
+
     loaded_models = []
-    upstream_root = os.environ.get("SOLAR_UPSTREAM_DIR", str(REPO_ROOT.parent / "solar"))
+    w_path = Path(weights_dir)
     for m in models:
         subdir = m["id"]
-        pruned_name = m.get("pruned_name", f"{subdir}.pt")
-        run_relpath = m.get("checkpoint_relpath", f"work/runs/{subdir}.pt")
         fam = m["family"]
         sz = m["img_size"]
         is_a5 = m.get("anchors5", False)
 
-        cand_paths = [
-            os.path.join(weights_dir, pruned_name),
-            os.path.join(weights_dir, f"{subdir}.pt"),
-            os.path.join(REPO_ROOT, "weights", pruned_name),
-            os.path.join(REPO_ROOT, "work/checkpoints", pruned_name),
-            os.path.join(REPO_ROOT, run_relpath),
-            os.path.join(upstream_root, "work/checkpoints", pruned_name),
-            os.path.join(upstream_root, run_relpath),
-        ]
-        ckpt_path = next((p for p in cand_paths if os.path.isfile(p)), None)
-        if not ckpt_path:
-            raise FileNotFoundError(f"Could not locate checkpoint for {subdir}. Checked: {cand_paths}")
-
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        ckpt_path = resolve_stage1_checkpoint_path(m, weights_dir=w_path, strict_weights_only=strict_weights_only)
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         state_dict = extract_state_dict(ckpt)
         model = get_maskrcnn_model(pretrained=False, min_size=sz, max_size=sz, num_classes=2, anchors5=is_a5)
         model.load_state_dict(state_dict)
         model.float().to(device).eval()
         loaded_models.append((subdir, fam, sz, model))
-        print(f"  Loaded model: {subdir} ({fam}, {sz}px) from {os.path.basename(ckpt_path)}")
+        print(f"  Loaded model: {subdir} ({fam}, {sz}px) from {ckpt_path.name}")
 
     views = [
         ("id", False, False),
@@ -704,18 +813,20 @@ def _resolve_test_dir(test_dir_arg: Optional[str], prefer_full_test: bool = Fals
 
 def main():
     parser = argparse.ArgumentParser(description="Regenerate Kaggle Solar Filament Submissions.")
-    parser.add_argument("--rule", type=str, choices=["A", "B", "C", "a", "b", "c"], default="B",
-                        help="Submission rule: 'A' (Uniform WMF), 'B' (Weighted WMF, default), or 'C' (Phase 3B Local)")
+    parser.add_argument("--rule", type=str, choices=["A", "B", "C", "ALL", "a", "b", "c", "all"], default="B",
+                        help="Submission rule: 'A', 'B', 'C' (Phase 3B Local), or 'ALL' (single GPU Stage-1 pass)")
     parser.add_argument("--mode", type=str, choices=["fast", "full"], default="fast",
                         help="Operation mode: 'fast' (from cache) or 'full' (from weights)")
     parser.add_argument("--output", type=str, default=None,
-                        help="Path to output submission CSV (default: rule-specific file in work/)")
+                        help="Output CSV path (for ALL, interpreted as output directory)")
     parser.add_argument("--config", type=str, default="configs/final_ensemble.json",
                         help="Path to ensemble configuration JSON")
     parser.add_argument("--cache-dir", type=str, default="work/test_cache",
                         help="Directory with precomputed candidate detections")
-    parser.add_argument("--weights-dir", type=str, default="work/checkpoints",
-                        help="Directory with model weights")
+    parser.add_argument("--weights-dir", type=str, default="weights",
+                        help="Directory with model weights (default: repo weights/)")
+    parser.add_argument("--strict-weights", action="store_true",
+                        help="Enforce strict loading from --weights-dir (FP16) with zero fallback")
     parser.add_argument("--test-dir", type=str, default=None,
                         help="Directory of test images (for full mode or Rule C)")
     parser.add_argument("--data-dir", type=str, default=None,
@@ -725,7 +836,9 @@ def main():
     parser.add_argument("--limit", type=int, default=None,
                         help="Limit number of test images to process")
     parser.add_argument("--validate", action="store_true", default=False,
-                        help="Run validate_submission.py on the generated CSV")
+                        help="Run validate_submission.py on the generated CSV(s)")
+    parser.add_argument("--stage1-cache-dir", type=str, default=None,
+                        help="Optional per-stem checkpoint directory for resumable Stage-1 inference")
     args = parser.parse_args()
 
     rule_upper = args.rule.upper()
@@ -734,13 +847,9 @@ def main():
         "B": "work/submission_B_weighted_30models.csv",
         "C": "work/submission_C_phase3b_local.csv",
     }
-    out_rel = args.output if args.output is not None else default_out_names[rule_upper]
-    out_path = out_rel if os.path.isabs(out_rel) else os.path.normpath(os.path.join(REPO_ROOT, out_rel))
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     cache_dir = args.cache_dir if os.path.isabs(args.cache_dir) else os.path.join(REPO_ROOT, args.cache_dir)
     if not os.path.isdir(cache_dir):
-        # Fall back to parent solar work/test_cache if running from solar_release
         alt_cache = os.path.join(REPO_ROOT.parent, "solar/work/test_cache")
         if os.path.isdir(alt_cache):
             cache_dir = alt_cache
@@ -749,82 +858,119 @@ def main():
     weights_dir = args.weights_dir if os.path.isabs(args.weights_dir) else os.path.join(REPO_ROOT, args.weights_dir)
     config_path = config_arg if os.path.isabs(config_arg) else os.path.join(REPO_ROOT, config_arg)
 
-    if rule_upper == "C":
-        from scripts.refiner_pipeline import run_phase3b_pipeline
-
+    generated: List[Tuple[str, str, pd.DataFrame, dict]] = []
+    if rule_upper == "ALL":
+        if args.mode != "full":
+            raise ValueError("--rule ALL requires --mode full")
         test_dir = _resolve_test_dir(args.test_dir or args.data_dir, prefer_full_test=False)
         if not test_dir or not os.path.isdir(test_dir):
             raise FileNotFoundError(f"Test directory not found: {test_dir}")
-        df_sub, stats = run_phase3b_pipeline(
-            test_dir=test_dir,
+        out_dir = Path(args.output if args.output else os.path.join(REPO_ROOT, "work"))
+        if not out_dir.is_absolute():
+            out_dir = REPO_ROOT / out_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        outputs, loaded_log = run_joint_full_mode(
             weights_dir=weights_dir,
-            cache_dir=cache_dir,
-            config_path=config_path,
+            test_dir=test_dir,
+            rules=("A", "B", "C"),
             device_str=args.device,
             limit=args.limit,
-            use_cache=(args.mode == "fast"),
-        )
-    elif args.mode == "fast":
-        df_sub, stats = run_fast_mode(
-            cache_dir=cache_dir,
-            rule_name=rule_upper,
             config_path=config_path,
-            limit=args.limit,
+            strict_weights_only=args.strict_weights,
+            verify_fp16=args.strict_weights,
+            stage1_cache_dir=args.stage1_cache_dir,
         )
+        name_map = {
+            "A": "submission_A_uniform_30models.csv",
+            "B": "submission_B_weighted_30models.csv",
+            "C": "submission_phase3b_local.csv",
+        }
+        for r in ("A", "B", "C"):
+            df_r, st_r = outputs[r]
+            p_r = str(out_dir / name_map[r])
+            df_r.to_csv(p_r, index=False)
+            generated.append((r, p_r, df_r, st_r))
+        print(f"[Joint Full Mode] Verified {len(set(loaded_log))} distinct repo weight files loaded.")
     else:
-        test_dir = _resolve_test_dir(args.test_dir or args.data_dir, prefer_full_test=False)
-        if not test_dir or not os.path.isdir(test_dir):
-            raise FileNotFoundError(f"Test directory not found: {test_dir}")
-        df_sub, stats = run_full_mode(
-            weights_dir=weights_dir,
-            test_dir=test_dir,
-            rule_name=rule_upper,
-            device_str=args.device,
-            limit=args.limit,
-            config_path=config_path,
-        )
-
-    df_sub.to_csv(out_path, index=False)
-    print(f"\n[Saved Submission] {out_path} ({len(df_sub)} rows, {stats['total_filaments']} filaments)")
-
-    if args.validate:
-        test_dir = _resolve_test_dir(args.test_dir or args.data_dir, prefer_full_test=True)
-        val_script = os.path.join(REPO_ROOT, "scripts/validate_submission.py")
-        cmd = [sys.executable, val_script, "--sub", out_path]
-        if test_dir and os.path.isdir(test_dir):
-            cmd.extend(["--test_dir", test_dir])
-            dir_imgs = [
-                p for p in glob.glob(os.path.join(test_dir, "*.*"))
-                if p.lower().endswith((".jpeg", ".jpg", ".png"))
-            ]
-            expected_n = (
-                min(int(args.limit), len(dir_imgs))
-                if (args.limit and dir_imgs)
-                else (int(args.limit) if args.limit else len(dir_imgs))
+        out_rel = args.output if args.output is not None else default_out_names[rule_upper]
+        out_path = out_rel if os.path.isabs(out_rel) else os.path.normpath(os.path.join(REPO_ROOT, out_rel))
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        if rule_upper == "C":
+            from scripts.refiner_pipeline import run_phase3b_pipeline
+            test_dir = _resolve_test_dir(args.test_dir or args.data_dir, prefer_full_test=False)
+            if not test_dir or not os.path.isdir(test_dir):
+                raise FileNotFoundError(f"Test directory not found: {test_dir}")
+            df_sub, stats = run_phase3b_pipeline(
+                test_dir=test_dir,
+                weights_dir=weights_dir,
+                cache_dir=cache_dir,
+                config_path=config_path,
+                device_str=args.device,
+                limit=args.limit,
+                use_cache=(args.mode == "fast"),
+                strict_weights_only=args.strict_weights,
+                verify_fp16=args.strict_weights,
             )
-            if expected_n:
-                cmd.extend(["--expected_count", str(expected_n)])
-        print(f"\n[Validation Hook] Running: {' '.join(cmd)}")
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        print(res.stdout)
-        if res.returncode != 0:
-            print("STDERR:\n", res.stderr)
-            raise RuntimeError(f"Validation failed for {out_path}")
+        elif args.mode == "fast":
+            df_sub, stats = run_fast_mode(
+                cache_dir=cache_dir,
+                rule_name=rule_upper,
+                config_path=config_path,
+                limit=args.limit,
+            )
+        else:
+            test_dir = _resolve_test_dir(args.test_dir or args.data_dir, prefer_full_test=False)
+            if not test_dir or not os.path.isdir(test_dir):
+                raise FileNotFoundError(f"Test directory not found: {test_dir}")
+            df_sub, stats = run_full_mode(
+                weights_dir=weights_dir,
+                test_dir=test_dir,
+                rule_name=rule_upper,
+                device_str=args.device,
+                limit=args.limit,
+                config_path=config_path,
+                strict_weights_only=args.strict_weights,
+            )
+        df_sub.to_csv(out_path, index=False)
+        generated.append((rule_upper, out_path, df_sub, stats))
 
-        # Sanity check against 180-image reference counts when evaluating full test set
-        n_imgs_eval = stats.get("num_images", len(df_sub["filament_id"].str.split("_").str[0].unique()))
-        if n_imgs_eval == 180 and not args.limit:
-            ref_map = {"A": (1165, 1241.0), "B": (1155, 1259.0), "C": (1170, 1233.5)}
-            ref_filaments, ref_median = ref_map[rule_upper]
-            cnt_diff = abs(stats["total_filaments"] - ref_filaments) / ref_filaments * 100.0
-            med_diff = abs(stats["median_area"] - ref_median) / ref_median * 100.0
-            print("Sanity Check vs Reference:")
-            print(f"  Filaments: {stats['total_filaments']} vs {ref_filaments} (diff: {cnt_diff:.2f}%)")
-            print(f"  Median Area: {stats['median_area']:.1f} px vs {ref_median:.1f} px (diff: {med_diff:.2f}%)")
-            if cnt_diff > 10.0 or med_diff > 10.0:
-                print("[WARNING] Sanity check deviation > 10%!")
-            else:
-                print("[OK] Sanity check passed within ±10% boundary.")
+    val_test_dir = _resolve_test_dir(args.test_dir or args.data_dir, prefer_full_test=True)
+    val_script = os.path.join(REPO_ROOT, "scripts/validate_submission.py")
+    ref_map = {"A": (1165, 1241.0), "B": (1155, 1259.0), "C": (1170, 1233.5)}
+
+    for r_tag, out_p, df_sub, stats in generated:
+        print(f"\n[Saved Submission {r_tag}] {out_p} ({len(df_sub)} rows, {stats['total_filaments']} filaments)")
+        if args.validate:
+            cmd = [sys.executable, val_script, "--sub", out_p]
+            if args.limit:
+                cmd.extend(["--expected_count", str(int(args.limit))])
+            elif val_test_dir and os.path.isdir(val_test_dir):
+                cmd.extend(["--test_dir", val_test_dir])
+                dir_imgs = [
+                    p for p in glob.glob(os.path.join(val_test_dir, "*.*"))
+                    if p.lower().endswith((".jpeg", ".jpg", ".png"))
+                ]
+                if dir_imgs:
+                    cmd.extend(["--expected_count", str(len(dir_imgs))])
+            print(f"[Validation Hook {r_tag}] Running: {' '.join(cmd)}")
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            print(res.stdout)
+            if res.returncode != 0:
+                print("STDERR:\n", res.stderr)
+                raise RuntimeError(f"Validation failed for {out_p}")
+
+            n_imgs_eval = stats.get("num_images", len(df_sub["filament_id"].str.split("_").str[0].unique()))
+            if n_imgs_eval == 180 and not args.limit:
+                ref_filaments, ref_median = ref_map[r_tag]
+                cnt_diff = abs(stats["total_filaments"] - ref_filaments) / ref_filaments * 100.0
+                med_diff = abs(stats["median_area"] - ref_median) / ref_median * 100.0
+                print(f"Sanity Check [{r_tag}] vs Reference:")
+                print(f"  Filaments: {stats['total_filaments']} vs {ref_filaments} (diff: {cnt_diff:.2f}%)")
+                print(f"  Median Area: {stats['median_area']:.1f} px vs {ref_median:.1f} px (diff: {med_diff:.2f}%)")
+                if cnt_diff > 10.0 or med_diff > 10.0:
+                    print(f"[WARNING] Sanity check deviation > 10% for Rule {r_tag}!")
+                else:
+                    print(f"[OK] Rule {r_tag} sanity check passed within ±10% boundary.")
 
 
 if __name__ == "__main__":

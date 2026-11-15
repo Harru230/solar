@@ -9,6 +9,7 @@ work/*
 *.pth
 !weights/*.pt
 !weights/phase3/*.pt
+!weights/phase3/*.part*
 weights_fp16/
 self_eval.py
 self-evaluation-notebook.ipynb

@@ -43,7 +43,7 @@
 \email{adampipal22@gmail.com}
 
 \begin{abstract}
-    This report describes our solution to the Solar Filament Segmentation Challenge~2026, a Kaggle competition on automatic segmentation of solar filaments in GONG H-$\alpha$ observations. Our pipeline combines a six-family Mask~R-CNN proposal ensemble (30~checkpoints evaluated across four flip views via Weighted Mask Fusion), full-disk \texttt{ResNet50} and \texttt{ResNeXt101} semantic U-Net priors, dual target-aligned ROI boundary refiners (\texttt{ResidualCropRefinerUNet} and wide-context \texttt{WideContextRefinerUNetV2}), a 25-booster 5-fold cross-fitted LightGBM ranker, and greedy pixel-disjoint canvas painting. Across strict observation-grouped 5-fold cross-validation over all 707 training observations (1,154 annotator records; 8,199 ground-truth filaments), nested refinement and scoring lift pooled Panoptic Quality (PQ) from \textbf{0.4543} (Public LB \textbf{0.40}) to \textbf{0.4688} ($\text{SQ}=0.6857$, $\text{RQ}=0.6836$, paired bootstrap $P=1.000$), with zero pixel overlaps across predicted instances.
+    This report describes our solution to the Solar Filament Segmentation Challenge~2026, a Kaggle competition on automatic segmentation of solar filaments in GONG H-$\alpha$ observations. Our pipeline combines a six-family Mask~R-CNN proposal ensemble (30~checkpoints evaluated across four flip views via Weighted Mask Fusion), full-disk \texttt{ResNet50} and \texttt{ResNeXt101} semantic U-Net priors, dual target-aligned ROI boundary refiners (\texttt{ResidualCropRefinerUNet} and wide-context \texttt{WideContextRefinerUNetV2}), a 25-booster 5-fold cross-fitted LightGBM ranker, and greedy pixel-disjoint canvas painting. Across strict observation-grouped 5-fold cross-validation over all 707 training observations (1,154 annotator records; 8,199 ground-truth filaments), nested refinement and scoring lift pooled Panoptic Quality (PQ) from \textbf{0.4521} \texttt{[nested]} / \textbf{0.4543} \texttt{[in-sample]} (Rule~B, Public LB \textbf{0.40}) to \textbf{0.4688} \texttt{[nested]} (Rule~C / Phase~3B Local, $\text{SQ}=0.6857$, $\text{RQ}=0.6836$, paired bootstrap $P=1.000$, Public LB \textbf{0.41}), with zero pixel overlaps across predicted instances and all 81 FP16 checkpoints stored in-repo ($<100\text{ MB}$ each).
 \end{abstract}
 
 \maketitle
@@ -116,20 +116,21 @@ Guide mode is on.}
         \toprule
         Configuration & Eval Tag & PQ & SQ / RQ & Preds (Test) \\
         \midrule
-        Single \texttt{1536 clahe} (4-TTA) & \texttt{[in-sample]} & 0.4338 & — & — \\
-        Single \texttt{2048 BCE} (4-TTA) & \texttt{[nested]} & 0.4400 & — & — \\
+        Single \texttt{1536 clahe} (4-TTA) & \texttt{[in-sample]} & 0.4338 & 0.6687 / 0.6487 & — \\
+        Single \texttt{2048 BCE} (4-TTA) & \texttt{[nested]} & 0.4400 & 0.6731 / 0.6537 & — \\
         6-Fam Rule A (Uniform WMF) & \texttt{[nested]} & 0.4508 & 0.6761 / 0.6668 & 1,165 (LB 0.39) \\
-        6-Fam Rule B (Weighted WMF) & \texttt{[in-sample]} & 0.4543 & 0.6773 / 0.6708 & 1,155 (LB 0.40) \\
-        Phase 2 Local (\texttt{CropV1 + LGB}) & \texttt{[nested]} & 0.4676 & 0.6857 / 0.6819 & 1,170 \\
-        \textbf{Phase 3B Local Winner (\texttt{Rule C})} & \texttt{[nested]} & \textbf{0.4688} & \textbf{0.6857 / 0.6836} & \textbf{1,170} \\
-        Hybrid A100 (\texttt{V1 / V1+V2 ConvNeXt}) & \texttt{[nested]} & 0.4692 / 0.4695 & 0.6860 / 0.6844 & 1,182 (cache) \\
+        6-Fam Rule B (Weighted WMF) & \texttt{[nested]} & 0.4521 & 0.6777 / 0.6672 & — \\
+        6-Fam Rule B (Fixed Global) & \texttt{[in-sample]} & 0.4543 & 0.6773 / 0.6708 & 1,155 (LB 0.40) \\
+        Phase 2 Local (\texttt{CropV1 + LGB}) & \texttt{[nested]} & 0.4676 & — & — \\
+        \textbf{Phase 3B Local Winner (\texttt{Rule C})} & \texttt{[nested]} & \textbf{0.4688} & \textbf{0.6857 / 0.6836} & \textbf{1,170 (LB 0.41)} \\
+        Hybrid A100 (\texttt{ConvNeXt V1 + S27}) & \texttt{[nested]} & 0.4692 & 0.6858 / 0.6841 & 1,182 (LB 0.40, cache) \\
         \bottomrule
     \end{tabular}%
     }
 \end{table}
 
 \begin{table}[t]
-    \caption{707-image OOF distributions and matching audit (Rule~B baseline vs Phase~3B Local \texttt{Rule C} where measured).}
+    \caption{707-image OOF distributions and matching audit (Rule~B \texttt{[in-sample]} baseline vs Phase~3B Local \texttt{Rule C} \texttt{[nested]}).}
     \label{tab:distributions}
     \centering
     \small
@@ -138,12 +139,14 @@ Guide mode is on.}
         \toprule
         Metric (707 OOF Images) & Mean $\pm$ Std & Median & [p25, p75] & Tail / Note \\
         \midrule
-        Per-Image PQ (Rule~B $\rightarrow$ \texttt{Rule C}) & $0.4457 \rightarrow \mathbf{0.4578}$ & \textbf{0.4752} & [0.390, 0.551] & max 0.8145 \\
-        Per-Image Union Dice (Rule~B $\rightarrow$ \texttt{Rule C}) & $0.6541 \rightarrow \mathbf{0.6639}$ & \textbf{0.7002} & [0.603, 0.753] & p95 0.8110 \\
-        Per-Image Union IoU (Rule~B) & $0.5044 \pm 0.1465$ & 0.5265 & [0.434, 0.605] & p95 0.6821 \\
-        Matched TP Inst IoU (Rule~B $\rightarrow$ \texttt{Rule C}) & $0.6773 \rightarrow \mathbf{0.6857}$ & \textbf{0.6911} & [0.615, 0.744] & max 0.907 \\
-        Matched TP Inst Dice (Rule~B) & 0.8045 & 0.8101 & [0.761, 0.853] & max 0.951 \\
-        GT Split / Pred Merge ($\text{IoU}>0.15$, \texttt{Rule C}) & 1.32\% / 1.60\% & — & — & GT multi-hit 0\% \\
+        Per-Image PQ (Rule~B, \texttt{[in-sample]}) & $0.4457 \pm 0.1494$ & 0.4585 & [0.374, 0.543] & max 0.8072 \\
+        Per-Image Union Dice (Rule~B, \texttt{[in-sample]}) & $0.6541 \pm 0.1570$ & 0.6887 & [0.603, 0.753] & p95 0.8110 \\
+        Per-Image Union Dice (\texttt{Rule C}, \texttt{[nested]}) & \textbf{0.6639} & \textbf{0.7002} & — & $k=1$ mean 0.6557 \\
+        Per-Image Union IoU (Rule~B, \texttt{[in-sample]}) & $0.5044 \pm 0.1465$ & 0.5265 & [0.434, 0.605] & p95 0.6821 \\
+        Matched TP Inst IoU (Rule~B, \texttt{[in-sample]}) & 0.6773 & 0.6808 & [0.615, 0.744] & max 0.907 \\
+        Matched TP Inst IoU (\texttt{Rule C}, \texttt{[nested]}) & \textbf{0.6857} & \textbf{0.6911} & — & TP 5,344 / FP 2,091 \\
+        Matched TP Inst Dice (Rule~B, \texttt{[in-sample]}) & 0.8045 & 0.8101 & [0.761, 0.853] & max 0.951 \\
+        GT Split / Pred Merge ($\text{IoU}>0.15$, \texttt{Rule C}) & 1.32\% / 1.60\% & — & — & GT multi-hit 0\% (A/B) \\
         Pred multi-hit ($\text{IoU}>0.5$, Rule~B) & 1 / 7,497 (0.013\%) & — & — & bridge 2.84\% ($\text{IoU}>0$) \\
         \bottomrule
     \end{tabular}%
@@ -151,7 +154,7 @@ Guide mode is on.}
 \end{table}
 
     \subsection{Quantitative Gain, Uncertainty \& Drift Checks}
-    Table~\ref{tab:results} summarizes progression: full Phase~3B local refinement (\texttt{Rule C}, \texttt{wref\_\allowbreak uv1\_t50}) lifts pooled \texttt{[nested]} PQ by \textbf{+0.0144} over Rule~B ($0.4543 \rightarrow 0.4688$; $\text{TP}=5{,}344, \text{FP}=2{,}091, \text{FN}=2{,}855$, single-annotator $k=1$ PQ $0.4720$, multi $0.4668$), and by $+0.0012$ ($P=0.9677$) over Phase~2 Local. Adding an auxiliary Colab \texttt{ConvNeXt\allowbreak AttnRefinerNet} yields $0.4692$ (\texttt{v1}) and $0.4695$ (\texttt{0.5*v1+\allowbreak 0.5*v2}), whereas \texttt{Rule C} preserves 100\% local checkpoint reproducibility. Stage-2 uncovered semantic recovery reached only $31.9\%$ precision ($\text{uncov}\ge 0.25$: 84/263 hits, $+0.00005$ PQ Local, $-0.00006$ Hybrid) and was omitted, while Phase~3C \texttt{ResNeXt101} detector retraining (\texttt{train\_frpy\_\allowbreak detector.py}) was deferred under time budget in favor of \texttt{WideContext\allowbreak RefinerUNetV2}. Across 10,000 image-level bootstrap resamples, the \texttt{Rule C} gain over Rule~B is decisive ($P=1.000$, 95\% CI $[+0.0114, +0.0175]$). Figures~\ref{fig:error_morph}--\ref{fig:matching_err} show baseline distributions, morphology stratification, and matching errors; adversarial OOF-vs-Test LightGBM AUC is $0.5077$ on detector features and $0.6206$ on S27 features (multiplicity ratio $1.008\times$: $1{,}170/180$ vs $4{,}559/707$, KS morphology $p \ge 0.538$).
+    Table~\ref{tab:results} summarizes progression: full Phase~3B local refinement (\texttt{Rule C}, \texttt{wref\_\allowbreak uv1\_t50}) lifts pooled \texttt{[nested]} PQ by \textbf{+0.0166} over \texttt{[nested]} Rule~B ($0.4521 \rightarrow 0.4688$) and by \textbf{+0.0144} over \texttt{[in-sample]} Rule~B ($0.4543 \rightarrow 0.4688$; $\text{TP}=5{,}344, \text{FP}=2{,}091, \text{FN}=2{,}855$, single-annotator $k=1$ PQ $0.4720$, multi $0.4668$), and by $+0.0012$ ($P=0.9677$) over Phase~2 Local. An auxiliary external-cache \texttt{ConvNeXt\allowbreak AttnRefinerNet} hybrid reaches $0.4692$ \texttt{[nested]} ($\text{SQ}=0.6858, \text{RQ}=0.6841$, Public LB $0.40$) but is omitted in favor of \texttt{Rule C} (Public LB \textbf{0.41}) to guarantee 100\% self-contained in-repo FP16 checkpoint reproducibility; Stage-2 uncovered-filament recovery yielded no significant net PQ gain and was likewise omitted. Across 10,000 image-level bootstrap resamples, the \texttt{Rule C} gain over Rule~B is decisive ($P=1.000$, 95\% CI $[+0.0114, +0.0175]$). Figures~\ref{fig:error_morph}--\ref{fig:matching_err} show baseline distributions, morphology stratification, and matching errors; adversarial OOF-vs-Test LightGBM AUC is $0.5077$ on detector features and $0.6206$ on S27 features (multiplicity ratio $1.008\times$: $1{,}170/180$ vs $4{,}559/707$, primary-scale KS $p \ge 0.538$ and all 15 morphological metrics $p \ge 0.051$). Regenerating all 180 test images in strict \texttt{FP32} from the 81 in-repo \texttt{FP16} checkpoints confirms parity against the Kaggle CSVs (mean union/instance IoU \textbf{0.961}/\textbf{0.970} for the single Selected final submission \texttt{submission\_phase3b\_local.csv}, and $0.943/0.957$, $0.932/0.954$ for Rule~B/A ablations relative to the original \texttt{bfloat16}-cached baseline).
 
 \begin{figure}[t]
     \centering
@@ -175,7 +178,7 @@ Guide mode is on.}
 \end{figure}
 
     \subsection{Failure Modes, Limitations \& Future Work}
-    Morphological audit highlights sharp recall degradation on hyper-thin filaments ($\text{width} < 5\text{ px}$: PQ $0.3773$) and small regions ($\text{area} < 300\text{ px}^2$: PQ $0.2483$), whereas large filaments reach PQ $0.5072$. Multi-component predicted masks (5.71\% in OOF vs 0.37\% in GT) contribute concentrated False Positives ($\text{PQ}=0.1021$), and sub-pixel rasterization sensitivity between \texttt{frPyObjects} and \texttt{cv2.\allowbreak fillPoly} shifts absolute IoU by $\sim 0.010$--$0.015\text{ PQ}$. Finally, single-annotator ground truth on 180 test observations induces $\sim\pm 0.015$ finite-sample test variance vs pooled multi-annotator CV ($0.454$ OOF vs $0.40$ LB). Future gains center on higher-resolution ($2048^2$) \texttt{frPyObjects}-supervised anchor detectors (\texttt{ResNeXt101-\allowbreak FPN}) to recover undetected sub-$5\text{ px}$ threads directly.
+    Morphological audit highlights sharp recall degradation on hyper-thin filaments ($\text{width} < 5\text{ px}$: PQ $0.3773$) and small regions ($\text{area} < 300\text{ px}^2$: PQ $0.2483$), whereas large filaments reach PQ $0.5072$. Multi-component predicted masks (5.71\% in OOF vs 0.37\% in GT) contribute concentrated False Positives ($\text{PQ}=0.1021$), and switching GT rasterization from official \texttt{frPyObjects} to \texttt{cv2.\allowbreak fillPoly} shifts nested 5-family PQ by $+0.0152$--$+0.0178$ ($0.4531 \rightarrow 0.4683$ and $0.4471 \rightarrow 0.4649$). Finally, single-annotator ground truth across 180 test images induces per-image variance ($\text{std}=0.1494$ in Rule~B OOF) relative to pooled multi-annotator CV ($0.4521$ \texttt{[nested]} / $0.4543$ \texttt{[in-sample]} vs $0.40$ LB; \texttt{Rule C} $0.4688$ \texttt{[nested]} vs $0.41$ LB). Future gains center on native $2048^2$ \texttt{frPyObjects}-supervised anchor detectors (\texttt{ResNeXt101-\allowbreak FPN}) to recover undetected sub-$5\text{ px}$ threads directly.
 
 
 % ==================================== %

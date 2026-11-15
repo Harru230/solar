@@ -78,12 +78,15 @@ def test_fast_single_family_config():
 
 
 def test_check_ensemble_weights_available():
-    """Verify check_ensemble_weights_available returns boolean and list."""
+    """Verify all 30 Stage-1 ensemble checkpoints exist strictly inside repo weights/."""
     from scripts.regenerate_submission import check_ensemble_weights_available
 
-    weights_ok, missing = check_ensemble_weights_available()
-    assert isinstance(weights_ok, bool)
-    assert isinstance(missing, list)
+    weights_ok, missing = check_ensemble_weights_available(
+        weights_dir=REPO_ROOT / "weights",
+        strict_weights_only=True,
+    )
+    assert weights_ok is True, f"Missing repo Stage-1 weights: {missing}"
+    assert missing == []
 
 
 def test_scorer_v2_models_joblib():
@@ -123,7 +126,7 @@ def test_extract_state_dict_fp16_compat():
 
 
 def test_in_repo_weights_under_100mb_and_checksums():
-    """Verify compact Fold-0 FP16 weights in weights/ exist, are < 100 MB each, and match SHA-256."""
+    """Verify all 81 final weight files in weights/ exist, are < 100 MB each, and match SHA-256."""
     import hashlib
 
     weights_dir = REPO_ROOT / "weights"
@@ -139,26 +142,29 @@ def test_in_repo_weights_under_100mb_and_checksums():
         digest, fname = line.split(None, 1)
         expected[fname] = digest
 
-    assert len(expected) == 42, f"Expected 42 checksum entries in weights/checksums.sha256, got {len(expected)}"
+    assert len(expected) == 81, f"Expected 81 checksum entries in weights/checksums.sha256, got {len(expected)}"
     for fname, digest in expected.items():
         fpath = weights_dir / fname
         assert fpath.is_file(), f"Missing weight file {fpath}"
         assert not fpath.is_symlink(), f"{fpath} must be a regular file, not a symlink"
-        size_mb = fpath.stat().st_size / (1024 * 1024)
-        assert size_mb < 100.0, f"{fname} exceeds 100 MB ({size_mb:.2f} MB)"
+        size_bytes = fpath.stat().st_size
+        assert size_bytes < 100_000_000, f"{fname} exceeds 100 MB decimal ({size_bytes} bytes)"
         actual = hashlib.sha256(fpath.read_bytes()).hexdigest()
         assert actual == digest, f"SHA-256 mismatch for {fname}: {actual} != {digest}"
 
 
 def test_phase3_refiner_config_and_offline_smoke():
-    """Verify configs/phase3b_refiner.json schema and run offline CPU forward smoke checks."""
+    """Verify configs/phase3b_refiner.json schema, sharded FP16 reassembly, and CPU smoke checks."""
     import numpy as np
     import torch
-    from scripts.common import extract_state_dict
     from scripts.refiner_pipeline import (
         ResidualCropRefinerUNet,
+        ResNet50SemanticUNet,
+        ResNeXt101SemanticUNet,
         WideContextRefinerUNetV2,
         load_lgb_boosters,
+        load_phase3_state_dict,
+        resolve_stage1_checkpoint_path,
     )
 
     cfg_path = REPO_ROOT / "configs" / "phase3b_refiner.json"
@@ -175,24 +181,78 @@ def test_phase3_refiner_config_and_offline_smoke():
     assert cfg["ranker"]["tau_score"] == 0.255
     assert cfg["mask_blending"]["mode"] == "wref_uv1_t50"
 
-    boosters, feat_names = load_lgb_boosters()
+    weights_dir = REPO_ROOT / "weights"
+    with open(REPO_ROOT / "configs" / "final_ensemble.json", "r") as f:
+        ens_cfg = json.load(f)
+    for m in ens_cfg["models"]:
+        resolved = resolve_stage1_checkpoint_path(m, weights_dir=weights_dir, strict_weights_only=True)
+        assert resolved.resolve().is_relative_to(weights_dir.resolve())
+
+    boosters, feat_names = load_lgb_boosters(weights_dir=weights_dir, strict_weights_only=True)
     assert len(boosters) == 25
     assert len(feat_names) == 27
     dummy_x = np.zeros((1, 27), dtype=np.float32)
     lgb_preds = [float(b.predict(dummy_x)[0]) for b in boosters]
     assert all(np.isfinite(p) for p in lgb_preds)
 
-    phase3_dir = REPO_ROOT / "weights" / "phase3"
+    m_r50 = ResNet50SemanticUNet(out_ch=2)
+    m_r50.load_state_dict(load_phase3_state_dict(
+        "semantic_unet_f0_fp16.pt", weights_dir=weights_dir, map_location="cpu",
+        strict_weights_only=True, verify_fp16=True,
+    ))
+    m_r50.eval()
+
+    m_rnx = ResNeXt101SemanticUNet(out_ch=3)
+    m_rnx.load_state_dict(load_phase3_state_dict(
+        "resnext101_unet_f0_fp16.pt", weights_dir=weights_dir, map_location="cpu",
+        strict_weights_only=True, verify_fp16=True,
+    ))
+    m_rnx.eval()
+
     m1 = ResidualCropRefinerUNet(in_ch=6, base=32)
-    m1.load_state_dict(extract_state_dict(torch.load(phase3_dir / "crop_refiner_f0_fp16.pt", map_location="cpu", weights_only=False)))
+    m1.load_state_dict(load_phase3_state_dict(
+        "phase3/crop_refiner_f0_fp16.pt", weights_dir=weights_dir, map_location="cpu",
+        strict_weights_only=True, verify_fp16=True,
+    ))
     m1.eval()
+
     m2 = WideContextRefinerUNetV2(in_ch=11, base=40)
-    m2.load_state_dict(extract_state_dict(torch.load(phase3_dir / "wide_refiner_v2_f0_fp16.pt", map_location="cpu", weights_only=False)))
+    m2.load_state_dict(load_phase3_state_dict(
+        "phase3/wide_refiner_v2_f0_fp16.pt", weights_dir=weights_dir, map_location="cpu",
+        strict_weights_only=True, verify_fp16=True,
+    ))
     m2.eval()
 
     with torch.no_grad():
         s_vec = torch.zeros((1, 4), dtype=torch.float32)
+        out_r50 = m_r50(torch.zeros((1, 3, 64, 64), dtype=torch.float32))
+        out_rnx = m_rnx(torch.zeros((1, 3, 64, 64), dtype=torch.float32))
         out1, iou1 = m1(torch.zeros((1, 6, 160, 160), dtype=torch.float32), s_vec)
         out2, iou2 = m2(torch.zeros((1, 11, 224, 224), dtype=torch.float32), s_vec)
+    assert tuple(out_r50.shape) == (1, 2, 64, 64) and torch.isfinite(out_r50).all()
+    assert tuple(out_rnx.shape) == (1, 3, 64, 64) and torch.isfinite(out_rnx).all()
     assert tuple(out1.shape) == (1, 160, 160) and torch.isfinite(iou1).all()
     assert tuple(out2.shape) == (1, 224, 224) and torch.isfinite(iou2).all()
+
+
+def test_fold_split_disjoint_no_leakage():
+    """Verify work/folds.csv strictly partitions 707 observations across 5 disjoint folds."""
+    import pandas as pd
+
+    folds_path = REPO_ROOT / "work" / "folds.csv"
+    assert folds_path.is_file(), f"Missing {folds_path}"
+    df = pd.read_csv(folds_path)
+    assert len(df) == 707
+    assert df["observation"].nunique() == 707
+    assert set(df["fold"].unique()) == {0, 1, 2, 3, 4}
+    by_fold = [set(df[df["fold"] == f]["observation"]) for f in range(5)]
+    for i in range(5):
+        for j in range(i + 1, 5):
+            assert len(by_fold[i] & by_fold[j]) == 0
+    sub_dir = REPO_ROOT / "submissions"
+    if sub_dir.is_dir():
+        train_obs = set(df["observation"].astype(str))
+        for csv_p in sub_dir.glob("*.csv"):
+            sub_df = pd.read_csv(csv_p)
+            test_obs = {fid.rsplit("_", 1)[0] for fid in sub_df["filament_id"].astype(str)}
+            assert len(train_obs & test_obs) == 0
